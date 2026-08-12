@@ -2,7 +2,7 @@
 
 const crypto = require('crypto');
 const jwt    = require('jsonwebtoken');
-const { pool } = require('../../config/database');
+const { pool } = require('../../../config/database');
 
 /**
  * Nexa OS — Auth Service
