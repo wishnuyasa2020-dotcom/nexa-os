@@ -3,7 +3,8 @@
 const express = require('express');
 const cors    = require('cors');
 
-const adminRoutes = require('./modules/admin/admin.routes');
+const adminRoutes  = require('./modules/admin/admin.routes');
+const authRoutes   = require('./modules/crm/auth/auth.routes');
 
 const app = express();
 
@@ -33,6 +34,7 @@ app.get('/', (_req, res) => {
 
 // ── API Routes ──────────────────────────────────────────────────
 app.use('/api/admin', adminRoutes);
+app.use('/api/crm/auth', authRoutes);
 
 // ── 404 Handler ─────────────────────────────────────────────────
 app.use((_req, res) => {
