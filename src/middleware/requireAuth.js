@@ -21,6 +21,7 @@ function requireAuth(req, res, next) {
     req.user = verifyJWT(token);
     next();
   } catch (err) {
+    console.error('JWT Verification failed:', err.message);
     return res.status(401).json({ status: 'error', message: 'Token tidak valid atau sudah kedaluwarsa.' });
   }
 }

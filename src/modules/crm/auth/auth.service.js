@@ -29,18 +29,64 @@ function _hashSHA256(password, salt) {
     .digest('hex');
 }
 
-// ── JWT ──────────────────────────────────────────────────────────
+// ── Token (Kompatibel dengan GAS) ──────────────────────────────────
+// Format: base64WebSafe(jsonPayload) + "." + base64WebSafe(hmacSha256(jsonPayload, secret))
+
+function toBase64WebSafe(str) {
+  return Buffer.from(str)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+function fromBase64WebSafe(str) {
+  let b64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) b64 += '=';
+  return Buffer.from(b64, 'base64').toString();
+}
 
 function _signJWT(payload) {
   const secret = process.env.JWT_SECRET_KEY;
   if (!secret) throw new Error('JWT_SECRET_KEY belum diset di .env!');
-  return jwt.sign(payload, secret, { expiresIn: '24h' });
+  
+  // payload.expires dalam ms (sama dengan GAS)
+  if (!payload.expires) {
+    payload.expires = Date.now() + 24 * 60 * 60 * 1000;
+  }
+  
+  const payloadStr = JSON.stringify(payload);
+  const signature = crypto.createHmac('sha256', secret).update(payloadStr).digest();
+  
+  const payloadB64 = toBase64WebSafe(payloadStr);
+  const signatureB64 = toBase64WebSafe(signature);
+  
+  return payloadB64 + '.' + signatureB64;
 }
 
 function verifyJWT(token) {
   const secret = process.env.JWT_SECRET_KEY;
   if (!secret) throw new Error('JWT_SECRET_KEY belum diset di .env!');
-  return jwt.verify(token, secret);
+  
+  const parts = token.split('.');
+  if (parts.length !== 2) throw new Error('Invalid token format');
+  
+  const payloadStr = fromBase64WebSafe(parts[0]);
+  const signatureB64 = parts[1];
+  
+  const expectedSignature = crypto.createHmac('sha256', secret).update(payloadStr).digest();
+  const expectedSignatureB64 = toBase64WebSafe(expectedSignature);
+  
+  if (signatureB64 !== expectedSignatureB64) {
+    throw new Error('Invalid signature');
+  }
+  
+  const payload = JSON.parse(payloadStr);
+  if (payload.expires < Date.now()) {
+    throw new Error('Token expired');
+  }
+  
+  return payload;
 }
 
 // ── Auth functions ───────────────────────────────────────────────

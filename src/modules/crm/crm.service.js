@@ -1,6 +1,6 @@
 'use strict';
 
-const { pool } = require('../../../config/database');
+const { pool } = require('../../config/database');
 
 /**
  * Nexa OS — CRM Service
@@ -61,6 +61,8 @@ async function getInitialData(user) {
     ? croRows.map(r => ({ username: r.username, nama: r.nama }))
     : [];
 
+  const CONSTANTS = require('./crm.constants');
+
   return {
     user:            { username: user.username, nama: user.nama, role: user.role },
     activePeriod,
@@ -71,9 +73,36 @@ async function getInitialData(user) {
     dashboardTab1: null,       // Fetched async by frontend
     sekolahPage1:  null,       // Fetched async by frontend
     masterData: {
-      sekolah:      sekolahUtama,
-      kecamatans,
       croList,
+      sekolah:                 sekolahUtama,
+      siswaSingkat:            [], // Dinonaktifkan: meload 15.000+ data ke <datalist> mematikan browser. Search langsung dikirim ke backend.
+      kecamatans,
+      statusSekolah:           CONSTANTS.STATUS_SEKOLAH,
+      nextActionSekolah:       CONSTANTS.NEXT_ACTION_SEKOLAH,
+      aktivitasSekolah:        CONSTANTS.AKTIVITAS_SEKOLAH,
+      aktivitasEkstraList:     CONSTANTS.AKTIVITAS_EKSTRA_LIST,
+      hasilSekolah:            Object.keys(CONSTANTS.HASIL_AKTIVITAS_SEKOLAH),
+      hasilSekolahMap:         CONSTANTS.HASIL_AKTIVITAS_SEKOLAH,
+      alasanDitolakSekolah:    CONSTANTS.ALASAN_DITOLAK_SEKOLAH,
+      statusSiswa:             CONSTANTS.STATUS_SISWA,
+      nextActionSiswa:         CONSTANTS.NEXT_ACTION_SISWA,
+      aktivitasSiswa:          CONSTANTS.AKTIVITAS_SISWA,
+      hasilSiswa:              Object.keys(CONSTANTS.HASIL_AKTIVITAS_SISWA),
+      hasilSiswaMap:           CONSTANTS.HASIL_AKTIVITAS_SISWA,
+      alasanTidakLanjutSiswa:  CONSTANTS.ALASAN_TIDAK_LANJUT_SISWA,
+      statusHomeVisit:         CONSTANTS.STATUS_HOME_VISIT,
+      nextActionHomeVisit:     CONSTANTS.NEXT_ACTION_HOME_VISIT,
+      aktivitasHomeVisit:      CONSTANTS.AKTIVITAS_HOME_VISIT,
+      hasilHomeVisit:          Object.keys(CONSTANTS.HASIL_AKTIVITAS_HOME_VISIT),
+      alasanTidakLanjutHV:     CONSTANTS.ALASAN_TIDAK_LANJUT_HV,
+      statusJadwal:            CONSTANTS.STATUS_JADWAL,
+      jenisSekolah:            CONSTANTS.JENIS_SEKOLAH,
+      statusKepemilikanSekolah: CONSTANTS.STATUS_KEPEMILIKAN_SEKOLAH,
+      roles:                   CONSTANTS.ROLES,
+      schedulableActions:      CONSTANTS.SCHEDULABLE_ACTIONS,
+      hasilButuhAlasanSiswa:   CONSTANTS.HASIL_BUTUH_ALASAN_SISWA,
+      hasilButuhAlasanSekolah: CONSTANTS.HASIL_BUTUH_ALASAN_SEKOLAH,
+      hasilButuhAlasanHV:      CONSTANTS.HASIL_BUTUH_ALASAN_HV
     },
   };
 }
