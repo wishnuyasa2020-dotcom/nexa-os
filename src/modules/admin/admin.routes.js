@@ -10,7 +10,9 @@ router.use(ctrl.requireAdminKey);
 
 router.get('/ping',     ctrl.ping);
 router.get('/overview', ctrl.overview);
-router.get('/tenants',  ctrl.tenants);
+router.get('/tenant',   ctrl.tenant);
+router.get('/usage',    ctrl.usage);
+router.get('/users',    ctrl.users);
 router.get('/health',   ctrl.health);
 router.get('/activity', ctrl.activity);
 

@@ -49,24 +49,52 @@ async function getOverview(marketingPeriod) {
   };
 }
 
-async function getTenants() {
+async function getTenant() {
   // Mock data karena tabel tenants belum ada di database Hostinger
-  return [
-    {
-      tenantId: 'derma-indonesia',
-      brandName: 'Derma Indonesia',
-      status: 'ACTIVE',
-      tier: 'PRO',
-      activeCro: 1,
-      maxCro: 3,
-      siswaAktif: 181,
-      sekolahAktif: 28,
-      activeTemplates: 3,
-      activePeriod: '2025/2026',
-      whatsappStatus: 'Connected',
-      whatsappNumber: '+628123456789'
-    }
-  ];
+  return {
+    tenantId: 'derma-indonesia',
+    brandName: 'Derma Indonesia',
+    appName: 'Derma CRM',
+    tier: 'PRO',
+    status: 'ACTIVE',
+    primaryColor: '#0066cc',
+    activeCro: 1,
+    totalCro: 1,
+    maxCro: 10,
+    activePeriod: '2025/2026',
+    periodStart: '2025-01-01',
+    periodEnd: '2026-12-31',
+    siswaAktif: 181,
+    sekolahAktif: 28,
+    activeTemplates: 3,
+    lastIncomingMsg: null,
+    whatsappStatus: 'CONNECTED'
+  };
+}
+
+async function getUsageStats() {
+  return {
+    activePeriod: '2025/2026',
+    siswaByStatus: [],
+    sekolahByStatus: [],
+    broadcast: { campaigns: 0, success: 0, failed: 0, pending: 0 },
+    homeVisits: 0,
+    msgByDay: [],
+    croActivity: []
+  };
+}
+
+async function getUserList() {
+  const [rows] = await pool.query(
+    "SELECT id, username, nama, role, status FROM users ORDER BY FIELD(role,'Admin','Manager','CRO','Visitor'), nama ASC"
+  );
+  return rows.map(r => ({
+    id: r.id,
+    username: r.username,
+    nama: r.nama,
+    role: r.role,
+    status: r.status
+  }));
 }
 
 async function getSystemHealth() {
@@ -157,4 +185,4 @@ async function getActivity() {
   return activities.slice(0, 10);
 }
 
-module.exports = { getOverview, getTenants, getSystemHealth, getActivity };
+module.exports = { getOverview, getTenant, getUsageStats, getUserList, getSystemHealth, getActivity };

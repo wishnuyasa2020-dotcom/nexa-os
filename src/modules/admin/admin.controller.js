@@ -38,11 +38,35 @@ async function overview(req, res) {
 }
 
 /**
- * GET /api/admin/tenants
+ * GET /api/admin/tenant
  */
-async function tenants(req, res) {
+async function tenant(req, res) {
   try {
-    const data = await adminService.getTenants();
+    const data = await adminService.getTenant();
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * GET /api/admin/usage
+ */
+async function usage(req, res) {
+  try {
+    const data = await adminService.getUsageStats();
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * GET /api/admin/users
+ */
+async function users(req, res) {
+  try {
+    const data = await adminService.getUserList();
     res.json({ status: 'ok', data });
   } catch (err) {
     res.status(500).json({ status: 'error', message: err.message });
@@ -73,4 +97,4 @@ async function activity(req, res) {
   }
 }
 
-module.exports = { requireAdminKey, ping, overview, tenants, health, activity };
+module.exports = { requireAdminKey, ping, overview, tenant, usage, users, health, activity };
