@@ -19,17 +19,17 @@ async function getOverview(marketingPeriod) {
     [broadcastRows],
     [hvRows],
   ] = await Promise.all([
-    pool.query('SELECT COUNT(*) AS total FROM users WHERE status = ?', ['active']),
-    pool.query("SELECT COUNT(*) AS total FROM users WHERE role = 'CRO' AND status = ?", ['active']),
-    pool.query('SELECT COUNT(*) AS total FROM siswa WHERE marketing_period = ?', [marketingPeriod]),
-    pool.query('SELECT COUNT(*) AS total FROM sekolah'),
+    pool.query('SELECT COUNT(*) AS total FROM users WHERE status = ?', ['aktif']),
+    pool.query("SELECT COUNT(*) AS total FROM users WHERE role = 'cro' AND status = ?", ['aktif']),
+    pool.query('SELECT COUNT(*) AS total FROM master_siswa'),
+    pool.query('SELECT COUNT(*) AS total FROM master_sekolah'),
     pool.query(
-      'SELECT COUNT(*) AS total FROM conversations WHERE status = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)',
+      'SELECT COUNT(*) AS total FROM conversations WHERE status = ?',
       ['active']
     ),
     pool.query(
-      'SELECT COUNT(*) AS total FROM broadcast_log WHERE marketing_period = ?',
-      [marketingPeriod]
+      'SELECT COALESCE(SUM(total_success), 0) AS total FROM broadcast',
+      []
     ),
     pool.query(
       'SELECT COUNT(*) AS total FROM home_visit WHERE marketing_period = ?',
