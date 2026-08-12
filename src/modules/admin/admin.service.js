@@ -87,25 +87,58 @@ async function getSystemHealth() {
 async function getActivity() {
   const activities = [];
 
-  // Pesan WhatsApp masuk (24 jam terakhir)
-  const [msgRows] = await pool.query(
-    "SELECT body, datetime, from_number FROM messages WHERE direction = 'inbound' ORDER BY datetime DESC LIMIT 5"
+  // Recent broadcasts (24h)
+  const [bcRows] = await pool.query(
+    'SELECT id_broadcast, template_display_name, total_target, total_success, total_failed, status, created_by, created_at ' +
+    'FROM broadcast WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) ORDER BY created_at DESC LIMIT 8'
   );
-  msgRows.forEach(r => {
+  bcRows.forEach(r => {
     activities.push({
-      type:  'message',
-      icon:  '💬',
-      title: 'Pesan Masuk: ' + (r.from_number || '-'),
-      desc:  (r.body || '').substring(0, 60),
-      badge: 'WA',
-      user:  'WhatsApp',
-      ts:    r.datetime,
+      type:  'broadcast',
+      icon:  '📢',
+      title: 'Broadcast: ' + (r.template_display_name || '-'),
+      desc:  'Target ' + r.total_target + ' • Terkirim ' + r.total_success + ' • Gagal ' + r.total_failed,
+      badge: r.status,
+      user:  r.created_by || 'System',
+      ts:    r.created_at
     });
   });
 
-  // Home visit (24 jam terakhir) — tanpa kolom created_by
+  // Recent new siswa (24h)
+  const [siswaRows] = await pool.query(
+    'SELECT nama_lengkap, created_date FROM master_siswa WHERE created_date >= DATE_SUB(NOW(), INTERVAL 24 HOUR) ORDER BY created_date DESC LIMIT 5'
+  );
+  siswaRows.forEach(r => {
+    activities.push({
+      type:  'siswa_baru',
+      icon:  '👤',
+      title: 'Siswa Baru: ' + r.nama_lengkap,
+      desc:  'Terdaftar via form sosialisasi',
+      badge: 'Baru',
+      user:  'System',
+      ts:    r.created_date
+    });
+  });
+
+  // Recent incoming chat (24h)
+  const [chatRows] = await pool.query(
+    "SELECT from_name, datetime FROM chat_messages WHERE direction = 'incoming' AND datetime >= DATE_SUB(NOW(), INTERVAL 24 HOUR) ORDER BY datetime DESC LIMIT 5"
+  );
+  chatRows.forEach(r => {
+    activities.push({
+      type:  'chat',
+      icon:  '💬',
+      title: 'Chat masuk: ' + (r.from_name || 'Unknown'),
+      desc:  'Pesan WhatsApp masuk',
+      badge: 'Chat',
+      user:  'WhatsApp',
+      ts:    r.datetime
+    });
+  });
+
+  // Recent home visits (24h)
   const [hvRows] = await pool.query(
-    'SELECT id_siswa_nama, tanggal_hv, hasil_hv FROM home_visit WHERE `timestamp` >= DATE_SUB(NOW(), INTERVAL 24 HOUR) ORDER BY `timestamp` DESC LIMIT 5'
+    'SELECT id_siswa_nama, tanggal_hv, hasil_hv FROM home_visit WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR) ORDER BY timestamp DESC LIMIT 5'
   );
   hvRows.forEach(r => {
     activities.push({
@@ -115,7 +148,7 @@ async function getActivity() {
       desc:  'Hasil: ' + (r.hasil_hv || '-'),
       badge: 'HV',
       user:  'CRO',
-      ts:    r.tanggal_hv,
+      ts:    r.tanggal_hv
     });
   });
 
