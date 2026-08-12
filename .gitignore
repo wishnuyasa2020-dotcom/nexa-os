@@ -1,0 +1,5 @@
+# Git ignore — jangan commit file sensitif
+node_modules/
+.env
+storage/
+*.log
