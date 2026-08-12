@@ -9,43 +9,65 @@ const { pool } = require('../../config/database');
  * Query sama persis dengan GAS agar hasilnya identik.
  */
 
-async function getOverview(marketingPeriod) {
+async function getOverview() {
+  // Active period
+  const [[periodRows]] = await pool.query(
+    'SELECT nama_period FROM marketing_period WHERE status = ? ORDER BY created_date DESC LIMIT 1',
+    ['aktif']
+  );
+  const activePeriod = periodRows?.nama_period || '-';
+
   const [
     [userRows],
     [croRows],
     [siswaRows],
     [sekolahRows],
-    [chatRows],
-    [broadcastRows],
+    [siswaAktifRows],
+    [chatMsgRows],
+    [convRows],
+    [bcastMonthRows],
+    [bcastSuccessRows],
     [hvRows],
   ] = await Promise.all([
-    pool.query('SELECT COUNT(*) AS total FROM users WHERE status = ?', ['aktif']),
-    pool.query("SELECT COUNT(*) AS total FROM users WHERE role = 'cro' AND status = ?", ['aktif']),
-    pool.query('SELECT COUNT(*) AS total FROM master_siswa'),
-    pool.query('SELECT COUNT(*) AS total FROM master_sekolah'),
-    pool.query(
-      'SELECT COUNT(*) AS total FROM conversations WHERE status = ?',
-      ['active']
-    ),
-    pool.query(
-      'SELECT COALESCE(SUM(total_success), 0) AS total FROM broadcast',
-      []
-    ),
-    pool.query(
-      'SELECT COUNT(*) AS total FROM home_visit WHERE marketing_period = ?',
-      [marketingPeriod]
-    ),
+    pool.query('SELECT status, COUNT(*) AS cnt FROM users GROUP BY status'),
+    pool.query("SELECT COUNT(*) AS cnt FROM users WHERE LOWER(role) = 'cro' AND LOWER(status) = 'aktif'"),
+    pool.query('SELECT COUNT(*) AS cnt FROM master_siswa'),
+    pool.query('SELECT COUNT(*) AS cnt FROM master_sekolah'),
+    activePeriod !== '-'
+      ? pool.query('SELECT COUNT(*) AS cnt FROM siswa_periode WHERE marketing_period = ?', [activePeriod])
+      : Promise.resolve([[{ cnt: 0 }]]),
+    pool.query('SELECT COUNT(*) AS cnt FROM chat_messages WHERE datetime >= DATE_SUB(NOW(), INTERVAL 24 HOUR)'),
+    pool.query("SELECT COUNT(*) AS cnt FROM conversations WHERE status = 'active'"),
+    pool.query("SELECT COUNT(*) AS cnt FROM broadcast WHERE created_at >= DATE_FORMAT(NOW(), '%Y-%m-01')"),
+    pool.query('SELECT COALESCE(SUM(total_success), 0) AS cnt FROM broadcast'),
+    activePeriod !== '-'
+      ? pool.query('SELECT COUNT(*) AS cnt FROM home_visit WHERE marketing_period = ?', [activePeriod])
+      : Promise.resolve([[{ cnt: 0 }]]),
   ]);
 
+  // totalUsers = semua status, activeUsers = yang status 'aktif'
+  let totalUsers = 0, activeUsers = 0;
+  userRows.forEach(r => {
+    const c = parseInt(r.cnt) || 0;
+    totalUsers += c;
+    if ((r.status || '').toLowerCase() === 'aktif') activeUsers = c;
+  });
+
   return {
-    tenantCount:    1, // Mock: tabel tenants belum ada di MySQL
-    totalUsers:     userRows[0]?.total   || 0,
-    croCount:       croRows[0]?.total    || 0,
-    totalSiswa:     siswaRows[0]?.total  || 0,
-    totalSekolah:   sekolahRows[0]?.total || 0,
-    activeChats:    chatRows[0]?.total   || 0,
-    broadcastCount: broadcastRows[0]?.total || 0,
-    homeVisitCount: hvRows[0]?.total     || 0,
+    tenants:              1,
+    totalUsers,
+    activeUsers,
+    activeCro:            parseInt(croRows[0]?.cnt)          || 0,
+    totalSiswa:           parseInt(siswaRows[0]?.cnt)        || 0,
+    totalSekolah:         parseInt(sekolahRows[0]?.cnt)      || 0,
+    siswaAktifPeriode:    parseInt(siswaAktifRows[0]?.cnt)   || 0,
+    messagesLast24h:      parseInt(chatMsgRows[0]?.cnt)      || 0,
+    activeConversations:  parseInt(convRows[0]?.cnt)         || 0,
+    broadcastsMonth:      parseInt(bcastMonthRows[0]?.cnt)   || 0,
+    totalBroadcastSuccess: parseInt(bcastSuccessRows[0]?.cnt) || 0,
+    homeVisitsAktif:      parseInt(hvRows[0]?.cnt)           || 0,
+    activePeriod,
+    generatedAt:          new Date().toISOString(),
   };
 }
 

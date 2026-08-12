@@ -25,12 +25,11 @@ async function ping(req, res) {
 }
 
 /**
- * GET /api/admin/overview?period=2025/2026
+ * GET /api/admin/overview
  */
 async function overview(req, res) {
   try {
-    const period = req.query.period || '2025/2026';
-    const data = await adminService.getOverview(period);
+    const data = await adminService.getOverview();
     res.json({ status: 'ok', data });
   } catch (err) {
     res.status(500).json({ status: 'error', message: err.message });
