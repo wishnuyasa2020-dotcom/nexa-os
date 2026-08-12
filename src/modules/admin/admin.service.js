@@ -11,7 +11,6 @@ const { pool } = require('../../config/database');
 
 async function getOverview(marketingPeriod) {
   const [
-    [tenantRows],
     [userRows],
     [croRows],
     [siswaRows],
@@ -20,7 +19,6 @@ async function getOverview(marketingPeriod) {
     [broadcastRows],
     [hvRows],
   ] = await Promise.all([
-    pool.query('SELECT COUNT(*) AS total FROM tenants WHERE status = ?', ['active']),
     pool.query('SELECT COUNT(*) AS total FROM users WHERE status = ?', ['active']),
     pool.query("SELECT COUNT(*) AS total FROM users WHERE role = 'CRO' AND status = ?", ['active']),
     pool.query('SELECT COUNT(*) AS total FROM siswa WHERE marketing_period = ?', [marketingPeriod]),
@@ -40,7 +38,7 @@ async function getOverview(marketingPeriod) {
   ]);
 
   return {
-    tenantCount:    tenantRows[0]?.total || 0,
+    tenantCount:    1, // Mock: tabel tenants belum ada di MySQL
     totalUsers:     userRows[0]?.total   || 0,
     croCount:       croRows[0]?.total    || 0,
     totalSiswa:     siswaRows[0]?.total  || 0,
@@ -52,10 +50,23 @@ async function getOverview(marketingPeriod) {
 }
 
 async function getTenants() {
-  const [rows] = await pool.query(
-    'SELECT id, name, status, plan, created_at FROM tenants ORDER BY created_at DESC'
-  );
-  return rows;
+  // Mock data karena tabel tenants belum ada di database Hostinger
+  return [
+    {
+      tenantId: 'derma-indonesia',
+      brandName: 'Derma Indonesia',
+      status: 'ACTIVE',
+      tier: 'PRO',
+      activeCro: 1,
+      maxCro: 3,
+      siswaAktif: 181,
+      sekolahAktif: 28,
+      activeTemplates: 3,
+      activePeriod: '2025/2026',
+      whatsappStatus: 'Connected',
+      whatsappNumber: '+628123456789'
+    }
+  ];
 }
 
 async function getSystemHealth() {

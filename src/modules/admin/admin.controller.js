@@ -18,7 +18,10 @@ function requireAdminKey(req, res, next) {
  * GET /api/admin/ping
  */
 async function ping(req, res) {
-  res.json({ status: 'ok', message: 'Nexa OS Express API is alive.', ts: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    data: { pong: true, message: 'Nexa OS Express API is alive.', ts: new Date().toISOString() }
+  });
 }
 
 /**
