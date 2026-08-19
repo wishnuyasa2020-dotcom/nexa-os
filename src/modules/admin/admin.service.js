@@ -1,6 +1,6 @@
 'use strict';
 
-const { pool } = require('../../config/database');
+const { pool, mainPool } = require('../../config/database');
 
 /**
  * Nexa Control Centre — Admin Service
@@ -53,8 +53,10 @@ async function getOverview() {
     if ((r.status || '').toLowerCase() === 'aktif') activeUsers = c;
   });
 
+  const [[tenantCount]] = await mainPool.query('SELECT COUNT(*) AS cnt FROM tenants');
+
   return {
-    tenants:              1,
+    tenants:              parseInt(tenantCount?.cnt)         || 0,
     totalUsers,
     activeUsers,
     activeCro:            parseInt(croRows[0]?.cnt)          || 0,
@@ -72,22 +74,43 @@ async function getOverview() {
 }
 
 async function getTenant() {
-  // Mock data karena tabel tenants belum ada di database Hostinger
+  // Ambil profil tenant dari Main DB
+  const [rows] = await mainPool.query(`
+    SELECT tenant_id, brand_name, tier, status, max_cro, current_period_start, current_period_end 
+    FROM tenants 
+    LIMIT 1
+  `);
+  
+  if (rows.length === 0) throw new Error("Belum ada tenant di Main DB.");
+  const d = rows[0];
+
+  // Ambil statistik operasional dari Tenant DB (pool)
+  const [[cro]] = await pool.query("SELECT COUNT(*) AS cnt FROM users WHERE LOWER(role)='cro' AND LOWER(status)='aktif'");
+  const [[siswa]] = await pool.query('SELECT COUNT(*) AS cnt FROM master_siswa');
+  const [[sekolah]] = await pool.query('SELECT COUNT(*) AS cnt FROM master_sekolah');
+
+  // Format periode (ex: 2025/2026)
+  let activePeriod = '2025/2026';
+  if (d.current_period_start) {
+    const yr = new Date(d.current_period_start).getFullYear();
+    activePeriod = yr + '/' + (yr + 1);
+  }
+
   return {
-    tenantId: 'derma-indonesia',
-    brandName: 'Derma Indonesia',
+    tenantId: d.tenant_id,
+    brandName: d.brand_name,
     appName: 'Derma CRM',
-    tier: 'PRO',
-    status: 'ACTIVE',
+    tier: d.tier,
+    status: d.status,
     primaryColor: '#0066cc',
-    activeCro: 1,
-    totalCro: 1,
-    maxCro: 10,
-    activePeriod: '2025/2026',
-    periodStart: '2025-01-01',
-    periodEnd: '2026-12-31',
-    siswaAktif: 181,
-    sekolahAktif: 28,
+    activeCro: parseInt(cro.cnt) || 0,
+    totalCro: parseInt(cro.cnt) || 0,
+    maxCro: d.max_cro || 10,
+    activePeriod: activePeriod,
+    periodStart: d.current_period_start,
+    periodEnd: d.current_period_end,
+    siswaAktif: parseInt(siswa.cnt) || 0,
+    sekolahAktif: parseInt(sekolah.cnt) || 0,
     activeTemplates: 3,
     lastIncomingMsg: null,
     whatsappStatus: 'CONNECTED'
