@@ -1,11 +1,12 @@
 'use strict';
 
 const { Router } = require('express');
-const ctrl          = require('./crm.controller');
-const sekolahCtrl   = require('./crm.sekolah.controller');
-const siswaCtrl     = require('./crm.siswa.controller');
-const broadcastCtrl = require('./broadcast/broadcast.controller');
-const weeklyCtrl    = require('./weekly/weekly.controller');
+const ctrl            = require('./crm.controller');
+const sekolahCtrl     = require('./crm.sekolah.controller');
+const siswaCtrl       = require('./crm.siswa.controller');
+const broadcastCtrl   = require('./broadcast/broadcast.controller');
+const weeklyCtrl      = require('./weekly/weekly.controller');
+const nurturingCtrl   = require('./nurturing/nurturing.controller');
 const { requireAuth } = require('../../middleware/requireAuth');
 
 const router = Router();
@@ -174,10 +175,31 @@ router.post('/broadcast/progress',          broadcastCtrl.getBroadcastProgress);
 router.post('/broadcast/check-history',     broadcastCtrl.checkTemplateHistory);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NURTURING
+// NURTURING — V1 RESTful
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/nurturing/dashboard',   ctrl.getNurturingDashboardData);
-router.post('/nurturing/snooze',      ctrl.getSnoozeDashboardData);
+// GET  /api/v1/nurturing/stats              — Summary cards Nurturing Dashboard
+router.get('/nurturing/stats',                  nurturingCtrl.getStats);
+
+// GET  /api/v1/nurturing/leads              — Daftar leads dalam campaign probing
+router.get('/nurturing/leads',                  nurturingCtrl.getLeads);
+
+// GET  /api/v1/nurturing/snooze/stats       — Summary cards Snooze Dashboard
+router.get('/nurturing/snooze/stats',           nurturingCtrl.getSnoozeStats);
+
+// GET  /api/v1/nurturing/snooze/leads       — Daftar leads yang sedang di-snooze
+router.get('/nurturing/snooze/leads',           nurturingCtrl.getSnoozeLeads);
+
+// POST /api/v1/nurturing/force-trigger      — Jalankan cron manual (testing)
+router.post('/nurturing/force-trigger',         nurturingCtrl.forceTrigger);
+
+// POST /api/v1/nurturing/takeover/:id       — Hentikan bot, CRO ambil alih
+router.post('/nurturing/takeover/:id',          nurturingCtrl.takeoverLead);
+
+// POST /api/v1/nurturing/snooze/add         — Tambah siswa ke snooze manual
+router.post('/nurturing/snooze/add',            nurturingCtrl.addSnooze);
+
+// DELETE /api/v1/nurturing/snooze/:id       — Hentikan snooze lebih awal
+router.delete('/nurturing/snooze/:id',          nurturingCtrl.stopSnooze);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WEEKLY PLANNING

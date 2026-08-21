@@ -3,13 +3,18 @@
 const express = require('express');
 const cors    = require('cors');
 
-const adminRoutes  = require('./modules/admin/admin.routes');
-const authRoutes   = require('./modules/crm/auth/auth.routes');
-const crmRoutes    = require('./modules/crm/crm.routes');
-const publicRoutes = require('./modules/crm/crm.public.routes');
-const webhookRoutes = require('./modules/crm/crm.webhook.routes');
+const adminRoutes     = require('./modules/admin/admin.routes');
+const authRoutes      = require('./modules/crm/auth/auth.routes');
+const crmRoutes       = require('./modules/crm/crm.routes');
+const publicRoutes    = require('./modules/crm/crm.public.routes');
+const webhookRoutes   = require('./modules/crm/crm.webhook.routes');
+const { initNurturingCron } = require('./modules/crm/nurturing/nurturing.cron');
 
 const app = express();
+
+// ── Init Background Jobs (Cron) ─────────────────────────────────────────────
+initNurturingCron();
+
 
 // ── Middleware ──────────────────────────────────────────────────
 app.use(cors());
