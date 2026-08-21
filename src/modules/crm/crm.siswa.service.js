@@ -5,7 +5,37 @@
  * Service RESTful Modul Siswa — nexa-crm-web integration
  */
 
-const { pool } = require('../../config/database');
+const { pool, mainPool } = require('../../config/database');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: Cek Kuota Siswa di Main Registry
+// ─────────────────────────────────────────────────────────────────────────────
+async function _checkSiswaLimits(requiredCount = 1) {
+  const dbName = process.env.DB_NAME;
+  
+  // 1. Get tenant_id from tenant_databases
+  const [dbRows] = await mainPool.query("SELECT tenant_id FROM tenant_databases WHERE db_name = ?", [dbName]);
+  if (dbRows.length === 0) return { tenantId: null }; 
+  const tenantId = dbRows[0].tenant_id;
+
+  // 2. Get limits from tenants
+  const [tenantRows] = await mainPool.query("SELECT limit_siswa, used_siswa FROM tenants WHERE tenant_id = ?", [tenantId]);
+  if (tenantRows.length === 0) return { tenantId };
+
+  const { limit_siswa, used_siswa } = tenantRows[0];
+  const sisa = (limit_siswa || 0) - (used_siswa || 0);
+
+  if (sisa < requiredCount) {
+    throw new Error(`Kuota input siswa telah habis atau tidak mencukupi (Sisa: ${sisa}, Dibutuhkan: ${requiredCount}). Silakan upgrade tier.`);
+  }
+
+  return { tenantId };
+}
+
+async function _incrementUsedSiswa(tenantId, incrementCount) {
+  if (!tenantId) return;
+  await mainPool.query("UPDATE tenants SET used_siswa = used_siswa + ? WHERE tenant_id = ?", [incrementCount, tenantId]);
+}
 
 // Konstanta Hasil Aktivitas (dari modul-siswa.md)
 const HASIL_AKTIVITAS_SISWA = {
@@ -161,6 +191,9 @@ async function tambahSiswa(data, user) {
     throw new Error('Data tidak lengkap (nama, no_wa, sekolah, minat, rencana lulus wajib).');
   }
 
+  // ── Validasi Kuota Ingestion ──
+  const { tenantId } = await _checkSiswaLimits(1);
+
   // Hitung prioritas
   const prioritas = hitungPrioritas(data.minat_awal, data.rencana_lulus);
   const waClean = cleanPhone(data.no_wa);
@@ -194,6 +227,10 @@ async function tambahSiswa(data, user) {
     `, [idSiswa, mp, 'Data Masuk', 'Screening', pjCro]);
 
     await conn.commit();
+
+    // Increment Kuota setelah sukses
+    await _incrementUsedSiswa(tenantId, 1).catch(e => console.error("Gagal increment used_siswa:", e));
+
     return { id: idSiswa, prioritas, status: 'Data Masuk' };
   } catch (err) {
     await conn.rollback();
@@ -333,6 +370,9 @@ async function importBatch(dataBatch, croName, user) {
   if (!Array.isArray(dataBatch) || dataBatch.length === 0) throw new Error('Data batch kosong.');
   if (!croName) throw new Error('CRO penanggung jawab wajib diisi saat import.');
 
+  // ── Validasi Kuota Ingestion Batch ──
+  const { tenantId } = await _checkSiswaLimits(dataBatch.length);
+
   let mp = user.selectedPeriod;
   if (!mp || mp === '-') mp = await getActivePeriod();
 
@@ -370,6 +410,12 @@ async function importBatch(dataBatch, croName, user) {
     }
 
     await conn.commit();
+    
+    // Increment Kuota berdasarkan data yang beneran masuk (sukses)
+    if (successCount > 0) {
+      await _incrementUsedSiswa(tenantId, successCount).catch(e => console.error("Gagal increment used_siswa:", e));
+    }
+
     return { successCount, skipCount };
   } catch (err) {
     await conn.rollback();

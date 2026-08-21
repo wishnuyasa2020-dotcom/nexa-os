@@ -23,11 +23,18 @@ CREATE TABLE IF NOT EXISTS `admin_users` (
 CREATE TABLE IF NOT EXISTS `tenants` (
   `tenant_id` VARCHAR(50) PRIMARY KEY, -- ex: 'derma-indonesia'
   `brand_name` VARCHAR(100) NOT NULL,  -- ex: 'Derma Indonesia'
-  `tier` ENUM('FREE', 'BASIC', 'PRO', 'ENTERPRISE') DEFAULT 'FREE',
+  `tier` ENUM('FREE', 'PRO', 'BUSINESS', 'ENTERPRISE') DEFAULT 'FREE',
   `status` ENUM('ACTIVE', 'SUSPENDED', 'EXPIRED') DEFAULT 'ACTIVE',
+  `billing_cycle` ENUM('MONTHLY', 'YEARLY', 'LIFETIME') DEFAULT 'MONTHLY',
   
-  -- Konfigurasi Kapasitas
+  -- Konfigurasi Kapasitas & Ingestion Limit
   `max_cro` INT DEFAULT 1,
+  `addon_cro` INT DEFAULT 0,
+  `limit_siswa` INT DEFAULT 300,
+  `limit_sekolah` INT DEFAULT 10,
+  `used_siswa` INT DEFAULT 0,
+  `used_sekolah` INT DEFAULT 0,
+  `next_quota_reset` DATE NULL,
   
   -- Konfigurasi Integrasi Meta API (WhatsApp BYOW)
   `whatsapp_phone_id` VARCHAR(50) NULL,
@@ -72,7 +79,7 @@ CREATE TABLE IF NOT EXISTS `tenant_databases` (
 -- 4. Tabel Plan Features (Feature Control per Tier)
 CREATE TABLE IF NOT EXISTS `plan_features` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
-  `tier` ENUM('FREE', 'BASIC', 'PRO', 'ENTERPRISE') NOT NULL,
+  `tier` ENUM('FREE', 'PRO', 'BUSINESS', 'ENTERPRISE') NOT NULL,
   `feature_code` VARCHAR(50) NOT NULL, -- ex: 'custom_domain'
   `is_enabled` BOOLEAN DEFAULT FALSE,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -104,8 +111,8 @@ CREATE TABLE IF NOT EXISTS `billing_history` (
 INSERT INTO `admin_users` (`username`, `password_hash`, `nama_lengkap`, `role`) VALUES 
 ('wishnu', 'hash_dari_password', 'Wishnu Wijaya', 'SuperAdmin');
 
-INSERT INTO `tenants` (`tenant_id`, `brand_name`, `tier`, `status`, `max_cro`, `custom_domain`) VALUES
-('derma-indonesia', 'Derma Indonesia', 'PRO', 'ACTIVE', 10, 'crm.dermaindonesia.com');
+INSERT INTO `tenants` (`tenant_id`, `brand_name`, `tier`, `billing_cycle`, `status`, `max_cro`, `limit_siswa`, `limit_sekolah`, `custom_domain`) VALUES
+('derma-indonesia', 'Derma Indonesia', 'PRO', 'MONTHLY', 'ACTIVE', 10, 1000, 20, 'crm.dermaindonesia.com');
 
 INSERT INTO `tenant_databases` (`tenant_id`, `db_host`, `db_port`, `db_name`, `db_user`, `db_password`) VALUES
 ('derma-indonesia', 'srv1412.hstgr.io', 3306, 'u294320793_crmdemo', 'u294320793_admindemo', '1379502026Ok!');

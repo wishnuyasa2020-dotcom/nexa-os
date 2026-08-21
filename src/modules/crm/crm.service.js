@@ -361,6 +361,36 @@ async function getDashboardSummary(user, marketingPeriodArg, monthFilter = 'All'
   const siapDaftar = (funnelSiswaMap['Siap Daftar'] || 0) + (funnelSiswaMap['Terdaftar'] || 0);
   const calonProspek = (funnelSiswaMap['Calon Prospek'] || 0) + prospekAktif;
 
+  const { mainPool } = require('../../config/database');
+  let quota = { tier: 'Free', limitSiswa: 300, usedSiswa: 0, limitSekolah: 10, usedSekolah: 0, limitUser: 4, usedUser: 0 };
+  try {
+    const dbName = process.env.DB_NAME;
+    const [dbRows] = await mainPool.query("SELECT tenant_id FROM tenant_databases WHERE db_name = ?", [dbName]);
+    if (dbRows.length > 0) {
+      const [tenantRows] = await mainPool.query("SELECT tier, limit_siswa, used_siswa, limit_sekolah, used_sekolah, max_admin, max_manager, max_chief_cro, max_cro, addon_cro FROM tenants WHERE tenant_id = ?", [dbRows[0].tenant_id]);
+      if (tenantRows.length > 0) {
+        const t = tenantRows[0];
+        const limitUser = (t.max_admin || 1) + (t.max_manager || 1) + (t.max_chief_cro || 1) + (t.max_cro || 1) + (t.addon_cro || 0);
+        
+        // Hitung total user aktif di tenant
+        const [userRows] = await pool.query("SELECT COUNT(*) as total FROM users WHERE LOWER(status) = 'aktif'");
+        const usedUser = userRows[0].total || 0;
+
+        quota = {
+          tier: t.tier || 'Free',
+          limitSiswa: t.limit_siswa || 300,
+          usedSiswa: t.used_siswa || 0,
+          limitSekolah: t.limit_sekolah || 10,
+          usedSekolah: t.used_sekolah || 0,
+          limitUser,
+          usedUser
+        };
+      }
+    }
+  } catch (err) {
+    console.error("Gagal get quota dashboard:", err);
+  }
+
   return {
     stats: {
       totalSekolah, sekolahTersosialisasi,
@@ -375,7 +405,8 @@ async function getDashboardSummary(user, marketingPeriodArg, monthFilter = 'All'
       konsultasi, pctKonsultasi: prospekAktif > 0 ? Math.round((konsultasi / prospekAktif) * 100) : 0,
       siapDaftar, pctSiapDaftar: konsultasi > 0 ? Math.round((siapDaftar / konsultasi) * 100) : 0,
       terdaftar, pctTerdaftar: siapDaftar > 0 ? Math.round((terdaftar / siapDaftar) * 100) : 0
-    }
+    },
+    quota
   };
 }
 

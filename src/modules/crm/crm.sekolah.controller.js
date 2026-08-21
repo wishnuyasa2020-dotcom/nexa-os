@@ -68,7 +68,7 @@ async function createSekolah(req, res) {
     res.status(201).json({ status: 'ok', data });
   } catch (err) {
     console.error('[sekolah] createSekolah Error:', err);
-    const code = err.message.includes('sudah terdaftar') ? 409 : 400;
+    const code = err.message.includes('sudah terdaftar') ? 409 : (err.message.includes('Kuota input') ? 403 : 400);
     res.status(code).json({ status: 'error', message: err.message });
   }
 }

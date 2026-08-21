@@ -22,7 +22,35 @@
  *                      created_date, last_updated
  */
 
-const { pool } = require('../../config/database');
+const { pool, mainPool } = require('../../config/database');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: Cek Kuota Sekolah di Main Registry
+// ─────────────────────────────────────────────────────────────────────────────
+async function _checkSekolahLimits(requiredCount = 1) {
+  const dbName = process.env.DB_NAME;
+  const [dbRows] = await mainPool.query("SELECT tenant_id FROM tenant_databases WHERE db_name = ?", [dbName]);
+  if (dbRows.length === 0) return { tenantId: null }; 
+  const tenantId = dbRows[0].tenant_id;
+
+  const [tenantRows] = await mainPool.query("SELECT limit_sekolah, used_sekolah FROM tenants WHERE tenant_id = ?", [tenantId]);
+  if (tenantRows.length === 0) return { tenantId };
+
+  const { limit_sekolah, used_sekolah } = tenantRows[0];
+  const sisa = (limit_sekolah || 0) - (used_sekolah || 0);
+
+  if (sisa < requiredCount) {
+    const err = new Error(`Kuota input sekolah telah habis atau tidak mencukupi (Sisa: ${sisa}, Dibutuhkan: ${requiredCount}). Silakan upgrade tier.`);
+    err.isQuotaError = true;
+    throw err;
+  }
+  return { tenantId };
+}
+
+async function _incrementUsedSekolah(tenantId, incrementCount) {
+  if (!tenantId) return;
+  await mainPool.query("UPDATE tenants SET used_sekolah = used_sekolah + ? WHERE tenant_id = ?", [incrementCount, tenantId]);
+}
 
 const HASIL_AKTIVITAS_SEKOLAH = {
   'Belum Bertemu PIC':                { status: 'Tunggu Visit Ulang',        nextAction: 'Visit Ulang' },
@@ -299,6 +327,9 @@ async function tambahSekolah(data, user) {
     throw new Error(`Sekolah "${data.namaSekolah}" (${data.tingkat}) di ${data.kecamatan} sudah terdaftar.`);
   }
 
+  // ── Validasi Kuota Ingestion ──
+  const { tenantId } = await _checkSekolahLimits(1);
+
   const now   = new Date();
   const mp    = await getActivePeriod();
   const newId = await generateSekolahId();
@@ -319,6 +350,9 @@ async function tambahSekolah(data, user) {
      VALUES (?, ?, ?, ?, 'Belum Visit', ?, 'Visit Awal', NULL, 'Menunggu Penjadwalan', 'Belum Diketahui', NULL, ?, ?)`,
     [recId, mp, newId, pj, now, now, now]
   );
+
+  // Increment Kuota setelah sukses
+  await _incrementUsedSekolah(tenantId, 1).catch(e => console.error("Gagal increment used_sekolah:", e));
 
   return { id: newId, status: 'Belum Visit', nextAction: 'Visit Awal' };
 }

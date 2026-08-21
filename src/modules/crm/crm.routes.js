@@ -7,6 +7,9 @@ const siswaCtrl       = require('./crm.siswa.controller');
 const broadcastCtrl   = require('./broadcast/broadcast.controller');
 const weeklyCtrl      = require('./weekly/weekly.controller');
 const nurturingCtrl   = require('./nurturing/nurturing.controller');
+const chatCtrl        = require('./chat/chat.controller');
+const templateCtrl    = require('./chat/template.controller');
+const userCtrl        = require('./crm.user.controller');
 const { requireAuth } = require('../../middleware/requireAuth');
 
 const router = Router();
@@ -18,6 +21,16 @@ router.use(requireAuth);
 // INITIAL DATA
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/initial-data', ctrl.getInitialData);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USERS — RESTful V1 (Manajemen Tim)
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/users',                                  userCtrl.getList);
+router.get('/users/:id',                              userCtrl.getDetail);
+router.post('/users',                                 userCtrl.create);
+router.put('/users/:id',                              userCtrl.update);
+router.patch('/users/:id/reset-password',             userCtrl.resetPassword);
+router.delete('/users/:id',                           userCtrl.remove);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SEKOLAH — RESTful V1 (nexa-crm-web)
@@ -221,5 +234,31 @@ router.patch('/weekly/agenda/:agendaId/reschedule',   weeklyCtrl.rescheduleTask)
 // DELETE /api/v1/weekly/agenda/:agendaId
 // Drag hari → backlog (delete weekly_planning + reset source due_date = NULL)
 router.delete('/weekly/agenda/:agendaId',             weeklyCtrl.unscheduleTask);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CHAT (INBOX) — V1 RESTful
+// ─────────────────────────────────────────────────────────────────────────────
+// GET  /api/v1/chats                              — Daftar percakapan (+ polling)
+// GET  /api/v1/chats/:convId/messages             — Riwayat pesan (+ cursor paging)
+// POST /api/v1/chats/:convId/send                 — Kirim pesan (Smart Routing)
+// PATCH /api/v1/chats/:convId/read               — Tandai semua pesan sudah dibaca
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/chats',                                  chatCtrl.getConversationList);
+router.get('/chats/:convId/messages',                 chatCtrl.getMessages);
+router.post('/chats/:convId/send',                    chatCtrl.sendMessage);
+router.patch('/chats/:convId/read',                   chatCtrl.markAsRead);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEMPLATE MANAGER — V1 RESTful
+// ─────────────────────────────────────────────────────────────────────────────
+// GET  /api/v1/templates                           — List semua template
+// POST /api/v1/templates                           — Buat template baru
+// PUT  /api/v1/templates/:id                       — Update template
+// POST /api/v1/templates/sync                      — Sync status dari Meta
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/templates',                              templateCtrl.getTemplates);
+router.post('/templates/sync',                        templateCtrl.syncMetaStatus);
+router.post('/templates',                             templateCtrl.createTemplate);
+router.put('/templates/:id',                          templateCtrl.updateTemplate);
 
 module.exports = router;

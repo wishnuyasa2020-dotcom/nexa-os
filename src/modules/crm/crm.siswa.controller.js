@@ -37,7 +37,7 @@ async function createSiswa(req, res) {
     res.status(201).json({ status: 'ok', data });
   } catch (err) {
     console.error('[siswa] createSiswa Error:', err);
-    const code = err.message.includes('sudah terdaftar') ? 409 : 400;
+    const code = err.message.includes('sudah terdaftar') ? 409 : (err.message.includes('Kuota input') ? 403 : 400);
     res.status(code).json({ status: 'error', message: err.message });
   }
 }
@@ -86,7 +86,8 @@ async function importBatch(req, res) {
     res.status(201).json({ status: 'ok', data });
   } catch (err) {
     console.error('[siswa] importBatch Error:', err);
-    res.status(400).json({ status: 'error', message: err.message });
+    const code = err.message.includes('Kuota input') ? 403 : 400;
+    res.status(code).json({ status: 'error', message: err.message });
   }
 }
 
