@@ -328,9 +328,9 @@ async function getDashboardSummary(user, marketingPeriodArg, monthFilter = 'All'
   const paramsSiswa = [mp];
 
   if (!isAdmin) {
-    croSek = ' AND pj_sekolah = ?';
+    croSek = ' AND sp.pj_sekolah = ?';
     paramsSek.push(user.nama);
-    croSiswa = ' AND cro = ?';
+    croSiswa = ' AND sp.cro = ?';
     paramsSiswa.push(user.nama);
   }
 
@@ -390,8 +390,8 @@ async function getDashboardTasks(user, marketingPeriod) {
   let croAe = '';
   
   if (!isAdmin) {
-    croSek = ` AND pj_sekolah = ${pool.escape(user.nama)}`;
-    croSiswa = ` AND cro = ${pool.escape(user.nama)}`;
+    croSek = ` AND sp.pj_sekolah = ${pool.escape(user.nama)}`;
+    croSiswa = ` AND sp.cro = ${pool.escape(user.nama)}`;
     croHv = ` AND sp.cro = ${pool.escape(user.nama)}`;
     croAe = ` AND ae.pj_aktivitas = ${pool.escape(user.nama)}`;
   }
@@ -465,9 +465,9 @@ async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All'
   const paramsSiswa = [mp];
 
   if (!isAdmin) {
-    croSek = ' AND pj_sekolah = ?';
+    croSek = ' AND sp.pj_sekolah = ?';
     paramsSek.push(user.nama);
-    croSiswa = ' AND cro = ?';
+    croSiswa = ' AND sp.cro = ?';
     paramsSiswa.push(user.nama);
   }
 
@@ -515,7 +515,7 @@ async function getDashboardAktivitas(user, marketingPeriod, monthFilter = 'All')
   let croSiswa = '';
   const paramsTop = [mp];
   if (!isAdmin) {
-    croSiswa = ' AND cro = ?';
+    croSiswa = ' AND sp.cro = ?';
     paramsTop.push(user.nama);
   }
 
@@ -543,7 +543,7 @@ async function getDashboardKecamatan(user, marketingPeriod, monthFilter = 'All')
   let croSek = '';
   const paramsKec = [mp];
   if (!isAdmin) {
-    croSek = ' AND pj_sekolah = ?';
+    croSek = ' AND sp.pj_sekolah = ?';
     paramsKec.push(user.nama);
   }
 
@@ -1075,7 +1075,7 @@ async function getWeeklyPlanningData(startDate, endDate, period, user) {
     WHERE marketing_period = ? AND tanggal IS NOT NULL ${dateFilterSqlManual}
   `;
   if (!isAdmin) {
-    sqlWP += " AND cro = ?";
+    sqlWP += " AND sp.cro = ?";
     paramsWP.push(user.nama);
   }
 
@@ -2427,6 +2427,136 @@ async function addAktivitasSekolah(data, user) {
   return { success: true, message: 'Aktivitas berhasil disimpan.' };
 }
 
+/**
+ * GET /api/v1/dashboard/leaderboard
+ * Top 3 CRO berdasarkan total siswa Terdaftar pada bulan berjalan.
+ * Untuk Admin/Manager: semua CRO. Untuk CRO: hanya diri sendiri (rank-nya).
+ */
+async function getDashboardLeaderboard(user, period) {
+  let mp = period || user.selectedPeriod;
+  if (!mp || mp === '-') mp = await getActiveMarketingPeriod();
+  const isAdmin = user.role === 'Admin' || user.role === 'Manager';
+
+  // Query ranking CRO berdasarkan closing (Terdaftar) bulan ini
+  let sql = `
+    SELECT 
+      sp.cro,
+      IFNULL(u.nama, sp.cro) AS nama_cro,
+      COUNT(*) AS total_closing
+    FROM siswa_periode sp
+    LEFT JOIN users u ON sp.cro = u.username
+    WHERE 
+      sp.marketing_period = ?
+      AND sp.status_terkini = 'Terdaftar'
+      AND MONTH(sp.status_updated_date) = MONTH(CURDATE())
+      AND YEAR(sp.status_updated_date) = YEAR(CURDATE())
+    GROUP BY sp.cro, u.nama
+    ORDER BY total_closing DESC
+    LIMIT 3
+  `;
+
+  const [rows] = await pool.query(sql, [mp]);
+
+  const leaderboard = rows.map((r, idx) => ({
+    rank:          idx + 1,
+    username:      r.cro,
+    nama:          r.nama_cro,
+    totalClosing:  parseInt(r.total_closing, 10),
+    medal:         ['🥇', '🥈', '🥉'][idx] || ''
+  }));
+
+  // Cari posisi user saat ini jika bukan admin (bisa saja tidak masuk top 3)
+  let userRank = null;
+  if (!isAdmin) {
+    const [rankRows] = await pool.query(`
+      SELECT sub.cro, sub.total_closing, sub.rn FROM (
+        SELECT sp.cro, COUNT(*) AS total_closing,
+               RANK() OVER (ORDER BY COUNT(*) DESC) AS rn
+        FROM siswa_periode sp
+        WHERE sp.marketing_period = ?
+          AND sp.status_terkini = 'Terdaftar'
+          AND MONTH(sp.status_updated_date) = MONTH(CURDATE())
+          AND YEAR(sp.status_updated_date) = YEAR(CURDATE())
+        GROUP BY sp.cro
+      ) sub WHERE sub.sp.cro = ?
+    `, [mp, user.username]);
+
+    if (rankRows.length > 0) {
+      userRank = {
+        rank:         parseInt(rankRows[0].rn, 10),
+        totalClosing: parseInt(rankRows[0].total_closing, 10)
+      };
+    }
+  }
+
+  return { leaderboard, userRank, period: mp };
+}
+
+/**
+ * POST /api/v1/tasks/:id/reschedule
+ * Reschedule due_date sebuah task (sekolah/siswa/homevisit/aktifitas_ekstra).
+ * Body: { tipe, newDate, alasan, period }
+ */
+async function rescheduleTask(id, tipe, newDate, alasan, user) {
+  if (!id || !tipe || !newDate || !alasan) {
+    throw new Error('id, tipe, newDate, dan alasan wajib diisi.');
+  }
+  if (!['sekolah', 'siswa', 'homevisit', 'aktifitas_ekstra'].includes(tipe)) {
+    throw new Error(`Tipe tidak valid: ${tipe}. Gunakan sekolah/siswa/homevisit/aktifitas_ekstra.`);
+  }
+
+  const now = new Date();
+  const updatedBy = user.username;
+
+  if (tipe === 'sekolah') {
+    // Update due_date di sekolah_periode + append catatan reschedule
+    const [rows] = await pool.query(
+      'SELECT catatan FROM sekolah_periode WHERE id_sekolah = ?',
+      [id]
+    );
+    const oldCatatan = rows[0]?.catatan || '';
+    const logEntry = `\n[Tunda ${now.toLocaleDateString('id-ID')} oleh ${updatedBy}]: ${alasan}`;
+    await pool.query(
+      `UPDATE sekolah_periode SET due_date = ?, catatan = CONCAT(IFNULL(catatan,''), ?), status_updated_date = NOW() WHERE id_sekolah = ?`,
+      [newDate, logEntry, id]
+    );
+
+  } else if (tipe === 'siswa') {
+    const [rows] = await pool.query(
+      'SELECT catatan FROM siswa_periode WHERE id_siswa = ?',
+      [id]
+    );
+    const logEntry = `\n[Tunda ${now.toLocaleDateString('id-ID')} oleh ${updatedBy}]: ${alasan}`;
+    await pool.query(
+      `UPDATE siswa_periode SET due_date = ?, catatan = CONCAT(IFNULL(catatan,''), ?), status_updated_date = NOW() WHERE id_siswa = ?`,
+      [newDate, logEntry, id]
+    );
+
+  } else if (tipe === 'homevisit') {
+    await pool.query(
+      `UPDATE home_visit SET due_date = ?, status_updated_date = NOW() WHERE id_siswa_nama = ?`,
+      [newDate, id]
+    );
+
+  } else if (tipe === 'aktifitas_ekstra') {
+    const logEntry = `[Tunda ${now.toLocaleDateString('id-ID')} oleh ${updatedBy}]: ${alasan}`;
+    await pool.query(
+      `UPDATE aktivitas_ekstra SET tanggal_rencana = ?, tujuan_catatan = CONCAT(IFNULL(tujuan_catatan,''), '\n', ?), updated_at = NOW() WHERE id_aktifitas_ekstra = ?`,
+      [newDate, logEntry, id]
+    );
+  }
+
+  return {
+    success: true,
+    id,
+    tipe,
+    newDate,
+    alasan,
+    updatedBy,
+    updatedAt: now.toISOString()
+  };
+}
+
 module.exports = { 
   getInitialData, 
   getAllSekolah, 
@@ -2468,5 +2598,7 @@ module.exports = {
   addSekolah,
   updateSekolah,
   updateLastAktivitasSekolah,
-  addAktivitasSekolah
+  addAktivitasSekolah,
+  getDashboardLeaderboard,
+  rescheduleTask
 };

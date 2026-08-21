@@ -452,6 +452,135 @@ async function addAktivitasSekolah(req, res) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────
+// V1 RESTful Controllers (GET-based, query params)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/dashboard/stats
+ * Query: ?period=2025/2026&month=All
+ */
+async function getDashboardStats(req, res) {
+  try {
+    const period = req.query.period || null;
+    const month  = req.query.month  || 'All';
+    const data   = await crmService.getDashboardSummary(req.user, period, month);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('getDashboardStats Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * GET /api/v1/dashboard/charts
+ * Query: ?period=2025/2026&month=All
+ */
+async function getDashboardCharts(req, res) {
+  try {
+    const period = req.query.period || null;
+    const month  = req.query.month  || 'All';
+    const data   = await crmService.getDashboardFunnels(req.user, period, month);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('getDashboardCharts Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * GET /api/v1/dashboard/leaderboard
+ * Query: ?period=2025/2026
+ */
+async function getDashboardLeaderboard(req, res) {
+  try {
+    const period = req.query.period || null;
+    const data   = await crmService.getDashboardLeaderboard(req.user, period);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('getDashboardLeaderboard Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * GET /api/v1/tasks
+ * Query: ?filter=today|overdue|tomorrow|upcoming|done&period=2025/2026
+ * 
+ * Map filter values ke format internal:
+ *   today     → hari_ini
+ *   overdue   → overdue_1_7  (default, paling relevan)
+ *   tomorrow  → besok
+ *   upcoming  → akan_datang
+ *   done      → (tidak ada di getTaskList, return empty)
+ */
+async function getTasksV1(req, res) {
+  try {
+    const filterMap = {
+      today:    'hari_ini',
+      overdue:  'overdue_1_7',
+      tomorrow: 'besok',
+      upcoming: 'akan_datang',
+      done:     'done',
+      // Internal categories juga tetap berfungsi langsung
+      hari_ini:      'hari_ini',
+      overdue_1_7:   'overdue_1_7',
+      overdue_8_14:  'overdue_8_14',
+      overdue_gt14:  'overdue_gt14',
+      besok:         'besok',
+      akan_datang:   'akan_datang',
+    };
+    const rawFilter = req.query.filter || 'today';
+    const category  = filterMap[rawFilter] || 'hari_ini';
+    const period    = req.query.period || null;
+    const limit     = parseInt(req.query.limit || '20', 10);
+    const page      = parseInt(req.query.page  || '1',  10);
+
+    if (category === 'done') {
+      return res.json({ status: 'ok', data: { tasks: [], counts: {}, meta: { filter: 'done', limit, page } } });
+    }
+
+    const data = await crmService.getTaskList(category, period, req.user);
+
+    // Pagination sederhana di sisi Node (data sudah dari DB, perlu slice)
+    const offset      = (page - 1) * limit;
+    const paginated   = data.tasks.slice(offset, offset + limit);
+    const totalItems  = data.tasks.length;
+    const totalPages  = Math.ceil(totalItems / limit);
+
+    res.json({
+      status: 'ok',
+      data: {
+        tasks: paginated,
+        counts: data.counts,
+        meta: { filter: rawFilter, category, limit, page, totalItems, totalPages }
+      }
+    });
+  } catch (err) {
+    console.error('getTasksV1 Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * POST /api/v1/tasks/:id/reschedule
+ * Body: { tipe, newDate, alasan, period }
+ */
+async function rescheduleTaskV1(req, res) {
+  try {
+    const { id }   = req.params;
+    const { tipe, newDate, alasan, period } = req.body;
+    const result   = await crmService.rescheduleTask(id, tipe, newDate, alasan, req.user);
+    res.json({ status: 'ok', data: result });
+  } catch (err) {
+    console.error('rescheduleTask Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+
+
+
 module.exports = { 
   getInitialData, 
   getAllSekolah, 
@@ -476,12 +605,8 @@ module.exports = {
   getHomeVisitById,
   createHomeVisit,
   addAktivitasHomeVisit,
-  getBroadcastSekolahList,
-  getBroadcastHistory,
-  getBroadcastTargetPreview,
-  createBroadcast,
-  getBroadcastProgress,
-  checkTemplateHistory,
+  // NOTE: broadcast handlers sudah dipindah ke broadcast/broadcast.controller.js
+  // Dibiarkan undefined di sini agar tidak break import lama (GAS tidak pakai ini)
   getNurturingDashboardData,
   getSnoozeDashboardData,
   addSiswa,
@@ -493,5 +618,12 @@ module.exports = {
   addSekolah,
   updateSekolah,
   updateLastAktivitasSekolah,
-  addAktivitasSekolah
+  addAktivitasSekolah,
+  // V1 RESTful
+  getDashboardStats,
+  getDashboardCharts,
+  getDashboardLeaderboard,
+  getTasksV1,
+  rescheduleTaskV1
 };
+
