@@ -78,14 +78,14 @@ async function listUsers(query = {}) {
   }
 
   const [rows] = await pool.query(
-    `SELECT id, username, nama, role, status FROM users ${where} ORDER BY FIELD(role,'Admin','Manager','CRO','Visitor'), nama ASC`,
+    `SELECT id, username, nama, role, status, supervisor_id FROM users ${where} ORDER BY FIELD(role,'Admin','Manager','CRO','Visitor'), nama ASC`,
     params
   );
   return rows;
 }
 
 async function getUserById(id) {
-  const [rows] = await pool.query("SELECT id, username, nama, role, status FROM users WHERE id = ? LIMIT 1", [id]);
+  const [rows] = await pool.query("SELECT id, username, nama, role, status, supervisor_id FROM users WHERE id = ? LIMIT 1", [id]);
   return rows.length > 0 ? rows[0] : null;
 }
 
@@ -107,8 +107,8 @@ async function addUser(data) {
   const status = data.status || 'aktif';
 
   const [result] = await pool.query(
-    "INSERT INTO users (username, password, nama, role, status, salt) VALUES (?, ?, ?, ?, ?, ?)",
-    [data.username, hash, data.nama, data.role, status, salt]
+    "INSERT INTO users (username, password, nama, role, status, salt, supervisor_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [data.username, hash, data.nama, data.role, status, salt, data.supervisor_id || null]
   );
 
   return { id: result.insertId, username: data.username, nama: data.nama, role: data.role, status };
@@ -140,6 +140,7 @@ async function updateUser(id, data) {
   if (data.nama) { clauses.push("nama = ?"); params.push(data.nama); }
   if (data.role) { clauses.push("role = ?"); params.push(data.role); }
   if (data.status_aktif) { clauses.push("status = ?"); params.push(data.status_aktif); }
+  if (data.supervisor_id !== undefined) { clauses.push("supervisor_id = ?"); params.push(data.supervisor_id || null); }
 
   if (clauses.length === 0) return { success: true };
 

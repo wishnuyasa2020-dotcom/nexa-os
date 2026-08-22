@@ -46,13 +46,27 @@ async function getConversationList(user, query = {}) {
     params.push('system');
   }
 
-  // CRO hanya melihat konversasi yang terkait dengan siswa mereka
   if (user.role === 'CRO') {
+    // CRO hanya melihat konversasi yang terkait dengan siswa mereka
     whereParts.push(`EXISTS (
       SELECT 1 FROM siswa_periode sp
       WHERE sp.id_siswa = c.id_siswa AND sp.cro = ?
     )`);
     params.push(user.nama);
+  } else if (user.role === 'Chief CRO') {
+    // Chief CRO melihat chat orphaned (id_siswa IS NULL) 
+    // DAN chat milik CRO bawahannya ATAU miliknya sendiri
+    whereParts.push(`(
+      c.id_siswa IS NULL OR EXISTS (
+        SELECT 1 FROM siswa_periode sp
+        WHERE sp.id_siswa = c.id_siswa AND (
+          sp.cro = ? OR sp.cro IN (
+            SELECT nama FROM users WHERE supervisor_id = ?
+          )
+        )
+      )
+    )`);
+    params.push(user.nama, user.id);
   }
 
   const where = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';

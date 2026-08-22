@@ -10,6 +10,7 @@ const nurturingCtrl   = require('./nurturing/nurturing.controller');
 const chatCtrl        = require('./chat/chat.controller');
 const templateCtrl    = require('./chat/template.controller');
 const userCtrl        = require('./crm.user.controller');
+const settingsCtrl    = require('./crm.settings.controller');
 const { requireAuth } = require('../../middleware/requireAuth');
 
 const router = Router();
@@ -260,5 +261,23 @@ router.get('/templates',                              templateCtrl.getTemplates)
 router.post('/templates/sync',                        templateCtrl.syncMetaStatus);
 router.post('/templates',                             templateCtrl.createTemplate);
 router.put('/templates/:id',                          templateCtrl.updateTemplate);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS (CLASS, KOTA & KECAMATAN MAPPING)
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/settings/kelas-mapping',                 settingsCtrl.getKelasMapping);
+router.post('/settings/kelas-mapping',                settingsCtrl.addKelasMapping);
+router.put('/settings/kelas-mapping/:id',             settingsCtrl.updateKelasMapping);
+router.delete('/settings/kelas-mapping/:id',          settingsCtrl.deleteKelasMapping);
+
+router.get('/settings/kota',                          settingsCtrl.getKotaList);
+router.post('/settings/kota',                         settingsCtrl.addKota);
+router.put('/settings/kota/:id',                      settingsCtrl.updateKota);
+router.delete('/settings/kota/:id',                   settingsCtrl.deleteKota);
+
+router.get('/settings/kecamatan',                     settingsCtrl.getKecamatanList);
+router.post('/settings/kecamatan',                    settingsCtrl.addKecamatan);
+router.put('/settings/kecamatan/:id',                 settingsCtrl.updateKecamatan);
+router.delete('/settings/kecamatan/:id',              settingsCtrl.deleteKecamatan);
 
 module.exports = router;

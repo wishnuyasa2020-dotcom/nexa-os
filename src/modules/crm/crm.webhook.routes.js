@@ -117,9 +117,9 @@ async function handleIncomingMessage(msg, contactMeta) {
     let idSiswa = null;
 
     if (convRows.length === 0) {
-      // Coba cari siswa berdasarkan no_wa
+      // Coba cari siswa berdasarkan no_wa (prioritaskan yang pertama didaftarkan)
       const [siswaRows] = await conn.query(
-        'SELECT id_siswa, nama_lengkap FROM master_siswa WHERE no_wa = ? LIMIT 1',
+        'SELECT id_siswa, nama_lengkap FROM master_siswa WHERE no_wa = ? ORDER BY id_siswa ASC LIMIT 1',
         [phoneClean]
       );
       const siswa = siswaRows[0] || null;

@@ -222,7 +222,7 @@ async function tambahSiswa(data, user) {
     // Insert siswa_periode (default Data Masuk)
     await conn.query(`
       INSERT INTO siswa_periode 
-      (id_siswa, marketing_period, status_terkini, next_action, due_date, pj_cro)
+      (id_siswa, marketing_period, status_terkini, next_action, due_date, cro)
       VALUES (?, ?, ?, ?, DATE_ADD(CURDATE(), INTERVAL 1 DAY), ?)
     `, [idSiswa, mp, 'Data Masuk', 'Screening', pjCro]);
 
