@@ -518,7 +518,7 @@ async function getTasksV1(req, res) {
   try {
     const filterMap = {
       today:    'hari_ini',
-      overdue:  'overdue_1_7',
+      overdue:  'overdue',
       tomorrow: 'besok',
       upcoming: 'akan_datang',
       done:     'done',

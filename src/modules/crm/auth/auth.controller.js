@@ -30,4 +30,26 @@ async function me(req, res) {
   res.json({ status: 'ok', data: { user: req.user } });
 }
 
-module.exports = { login, me };
+async function forgotPassword(req, res) {
+  try {
+    const { email } = req.body;
+    const result = await authService.forgotPassword(email);
+    if (!result.success) return res.status(400).json({ status: 'error', message: result.message });
+    res.json({ status: 'ok', message: result.message });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+async function resetPassword(req, res) {
+  try {
+    const { token, newPassword } = req.body;
+    const result = await authService.resetPassword(token, newPassword);
+    if (!result.success) return res.status(400).json({ status: 'error', message: result.message });
+    res.json({ status: 'ok', message: result.message });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+module.exports = { login, me, forgotPassword, resetPassword };

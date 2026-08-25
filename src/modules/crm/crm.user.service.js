@@ -78,25 +78,25 @@ async function listUsers(query = {}) {
   }
 
   const [rows] = await pool.query(
-    `SELECT id, username, nama, role, status, supervisor_id FROM users ${where} ORDER BY FIELD(role,'Admin','Manager','CRO','Visitor'), nama ASC`,
+    `SELECT id, username, email, nama, role, status, supervisor_id FROM users ${where} ORDER BY FIELD(role,'Admin','Manager','CRO','Visitor'), nama ASC`,
     params
   );
   return rows;
 }
 
 async function getUserById(id) {
-  const [rows] = await pool.query("SELECT id, username, nama, role, status, supervisor_id FROM users WHERE id = ? LIMIT 1", [id]);
+  const [rows] = await pool.query("SELECT id, username, email, nama, role, status, supervisor_id FROM users WHERE id = ? LIMIT 1", [id]);
   return rows.length > 0 ? rows[0] : null;
 }
 
 async function addUser(data) {
-  if (!data.username || !data.password || !data.nama || !data.role) {
-    throw new Error("Username, password, nama, dan role wajib diisi.");
+  if (!data.username || !data.email || !data.password || !data.nama || !data.role) {
+    throw new Error("Username, email, password, nama, dan role wajib diisi.");
   }
 
-  const [existing] = await pool.query("SELECT id FROM users WHERE username = ? LIMIT 1", [data.username]);
+  const [existing] = await pool.query("SELECT id FROM users WHERE username = ? OR email = ? LIMIT 1", [data.username, data.email]);
   if (existing.length > 0) {
-    throw new Error("Username sudah terdaftar.");
+    throw new Error("Username atau email sudah terdaftar.");
   }
 
   // Cek limit sesuai role yang di-input
@@ -107,11 +107,11 @@ async function addUser(data) {
   const status = data.status || 'aktif';
 
   const [result] = await pool.query(
-    "INSERT INTO users (username, password, nama, role, status, salt, supervisor_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    [data.username, hash, data.nama, data.role, status, salt, data.supervisor_id || null]
+    "INSERT INTO users (username, email, password, nama, role, status, salt, supervisor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    [data.username, data.email, hash, data.nama, data.role, status, salt, data.supervisor_id || null]
   );
 
-  return { id: result.insertId, username: data.username, nama: data.nama, role: data.role, status };
+  return { id: result.insertId, username: data.username, email: data.email, nama: data.nama, role: data.role, status };
 }
 
 async function updateUser(id, data) {
@@ -138,6 +138,7 @@ async function updateUser(id, data) {
   const clauses = [];
   const params = [];
   if (data.nama) { clauses.push("nama = ?"); params.push(data.nama); }
+  if (data.email) { clauses.push("email = ?"); params.push(data.email); }
   if (data.role) { clauses.push("role = ?"); params.push(data.role); }
   if (data.status_aktif) { clauses.push("status = ?"); params.push(data.status_aktif); }
   if (data.supervisor_id !== undefined) { clauses.push("supervisor_id = ?"); params.push(data.supervisor_id || null); }

@@ -11,11 +11,17 @@ const chatCtrl        = require('./chat/chat.controller');
 const templateCtrl    = require('./chat/template.controller');
 const userCtrl        = require('./crm.user.controller');
 const settingsCtrl    = require('./crm.settings.controller');
+const calendarRoutes  = require('./calendar/calendar.routes');
 const { requireAuth } = require('../../middleware/requireAuth');
 
 const router = Router();
 
-// Semua API CRM (kecuali auth) membutuhkan token JWT
+// ─────────────────────────────────────────────────────────────────────────────
+// CALENDAR SYNC — V1 RESTful (Didaftarkan sebelum requireAuth global)
+// ─────────────────────────────────────────────────────────────────────────────
+router.use('/calendar', calendarRoutes);
+
+// Semua API CRM (kecuali auth & calendar callback) membutuhkan token JWT
 router.use(requireAuth);
 
 // ─────────────────────────────────────────────────────────────────────────────

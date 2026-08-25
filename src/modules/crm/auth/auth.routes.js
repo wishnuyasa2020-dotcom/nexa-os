@@ -11,6 +11,12 @@ const router = Router();
 // POST /api/crm/auth/login   ← public
 router.post('/login', ctrl.login);
 
+// POST /api/crm/auth/forgot-password — public
+router.post('/forgot-password', ctrl.forgotPassword);
+
+// POST /api/crm/auth/reset-password — public
+router.post('/reset-password', ctrl.resetPassword);
+
 // GET  /api/crm/auth/me      ← butuh token
 router.get('/me', requireAuth, ctrl.me);
 

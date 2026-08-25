@@ -790,7 +790,10 @@ async function getTaskList(category, period, user) {
 
   let dateFilterSqlDue = "";
   let dateFilterSqlRencana = "";
-  if (targetCategory === 'overdue_gt14') {
+  if (targetCategory === 'overdue') {
+    dateFilterSqlDue = " AND DATEDIFF(sp.due_date, CURDATE()) < 0";
+    dateFilterSqlRencana = " AND DATEDIFF(ae.tanggal_rencana, CURDATE()) < 0";
+  } else if (targetCategory === 'overdue_gt14') {
     dateFilterSqlDue = " AND DATEDIFF(sp.due_date, CURDATE()) < -14";
     dateFilterSqlRencana = " AND DATEDIFF(ae.tanggal_rencana, CURDATE()) < -14";
   } else if (targetCategory === 'overdue_8_14') {

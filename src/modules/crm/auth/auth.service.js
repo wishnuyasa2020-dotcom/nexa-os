@@ -205,6 +205,7 @@ async function login(username, password) {
   }
 
   const user = {
+    id:       rows.id,
     username: String(rows.username).trim(),
     nama:     String(rows.nama    || '').trim(),
     role:     String(rows.role    || '').trim(),
@@ -226,4 +227,100 @@ async function login(username, password) {
   };
 }
 
-module.exports = { login, verifyJWT };
+// ── Lupa Password & Reset Password ──────────────────────────────────────
+const nodemailer = require('nodemailer');
+
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST || 'smtp.gmail.com',
+  port: Number(process.env.SMTP_PORT) || 587,
+  secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+  auth: {
+    user: process.env.SMTP_USER, 
+    pass: process.env.SMTP_PASS,
+  },
+});
+
+async function forgotPassword(email) {
+  if (!email) return { success: false, message: 'Email tidak boleh kosong.' };
+
+  // Cari user dengan email ini
+  const [[user]] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [String(email).trim()]);
+  
+  // Note: Untuk multi-tenant (Phase 3), di masa depan harus dicari ke semua database tenant,
+  // atau user harus tahu dia login di tenant mana. Saat ini kita asumsikan mencari di default tenant.
+  if (!user) {
+    // Return sukses aja biar gak ngasih tahu email terdaftar/gak (keamanan)
+    return { success: true, message: 'Jika email terdaftar, instruksi reset password telah dikirimkan.' };
+  }
+
+  // Buat token 64 hex characters
+  const token = crypto.randomBytes(32).toString('hex');
+  const expires = Date.now() + 3600000; // 1 jam dari sekarang
+
+  // Simpan token ke db
+  await pool.query(
+    'UPDATE users SET reset_password_token = ?, reset_password_expires = ? WHERE id = ?',
+    [token, expires, user.id]
+  );
+
+  // Buat link (asumsi frontend running di URL tertentu, bisa pakai process.env.FRONTEND_URL)
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const resetLink = `${frontendUrl}/reset-password?token=${token}`;
+
+  // Kirim email
+  try {
+    await transporter.sendMail({
+      from: `"Nexa CRM" <${process.env.SMTP_USER || 'no-reply@nexa.id'}>`,
+      to: email,
+      subject: 'Reset Password - Nexa CRM',
+      html: `
+        <h3>Halo ${user.nama},</h3>
+        <p>Kami menerima permintaan untuk mereset password akun Anda di Nexa CRM.</p>
+        <p>Silakan klik tautan di bawah ini untuk mengatur password baru:</p>
+        <a href="${resetLink}" style="display:inline-block;padding:10px 15px;background:#007BFF;color:#fff;text-decoration:none;border-radius:5px;">Reset Password</a>
+        <br><br>
+        <p>Tautan ini akan kedaluwarsa dalam 1 jam.</p>
+        <p>Jika Anda tidak pernah meminta reset password, abaikan email ini.</p>
+      `,
+    });
+    console.log('[Auth] Forgot password email sent to:', email);
+  } catch (err) {
+    console.error('[Auth] Failed to send email:', err);
+    // Kita tetap bilang sukses ke user supaya prosesnya smooth, 
+    // tapi tokennya bisa kita clear atau biarkan expired
+  }
+
+  return { success: true, message: 'Jika email terdaftar, instruksi reset password telah dikirimkan.' };
+}
+
+async function resetPassword(token, newPassword) {
+  if (!token || !newPassword) {
+    return { success: false, message: 'Token dan password baru wajib diisi.' };
+  }
+
+  const [[user]] = await pool.query(
+    'SELECT * FROM users WHERE reset_password_token = ? LIMIT 1',
+    [token]
+  );
+
+  if (!user) {
+    return { success: false, message: 'Token tidak valid atau sudah tidak berlaku.' };
+  }
+
+  if (Date.now() > user.reset_password_expires) {
+    return { success: false, message: 'Token sudah kedaluwarsa.' };
+  }
+
+  // Generate salt dan hash password baru dengan metode default Nexa
+  const newSalt = _generateSalt();
+  const newHash = _hashSHA256(newPassword, newSalt);
+
+  await pool.query(
+    'UPDATE users SET password = ?, salt = ?, reset_password_token = NULL, reset_password_expires = NULL WHERE id = ?',
+    [newHash, newSalt, user.id]
+  );
+
+  return { success: true, message: 'Password berhasil diubah. Silakan login kembali.' };
+}
+
+module.exports = { login, verifyJWT, forgotPassword, resetPassword };

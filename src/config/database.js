@@ -26,6 +26,8 @@ const mainPool = mysql.createPool({
   queueLimit:      0,
   timezone:        '+07:00',
   charset:         'utf8mb4',
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
 });
 
 // 2. Pool untuk Tenant Default (crmdemo)
@@ -40,6 +42,8 @@ const pool = mysql.createPool({
   queueLimit:      0,
   timezone:        '+07:00',     // WIB
   charset:         'utf8mb4',
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
 });
 
 // Fungsi untuk mendapatkan pool dinamis berdasarkan kredensial (Fase 3 Lanjutan)
@@ -53,7 +57,9 @@ function getDynamicPool(config) {
     connectionLimit: 5,
     waitForConnections: true,
     timezone: '+07:00',
-    charset: 'utf8mb4'
+    charset: 'utf8mb4',
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10000,
   });
 }
 

@@ -3,6 +3,17 @@
 const crypto = require('crypto');
 const mysql = require('mysql2/promise');
 const { pool, mainPool } = require('../../config/database');
+const nodemailer = require('nodemailer');
+
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST || 'smtp.gmail.com',
+  port: Number(process.env.SMTP_PORT) || 587,
+  secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+  auth: {
+    user: process.env.SMTP_USER, 
+    pass: process.env.SMTP_PASS,
+  },
+});
 
 /**
  * Nexa Control Centre — Admin Service
@@ -252,7 +263,7 @@ async function getActivity() {
 }
 
 async function provisionNewTenant(payload) {
-  const { brand, tier, maxCro, dbHost, dbName, dbUser, dbPass } = payload;
+  const { brand, tier, maxCro, dbHost, dbName, dbUser, dbPass, adminEmail } = payload;
   
   // 1. Generate tenant_id from brand name
   let tenantId = brand.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -321,12 +332,38 @@ async function provisionNewTenant(payload) {
     const hash = crypto.createHash('sha256').update(String(adminPassword) + String(salt)).digest('hex');
 
     await dbBaru.query(
-      `INSERT INTO users (username, password, salt, nama, role, status) VALUES (?, ?, ?, 'Super Admin', 'Admin', 'aktif')`,
-      [adminUsername, hash, salt]
+      `INSERT INTO users (username, email, password, salt, nama, role, status) VALUES (?, ?, ?, ?, 'Super Admin', 'Admin', 'aktif')`,
+      [adminUsername, adminEmail, hash, salt]
     );
 
   } finally {
     await dbBaru.end();
+  }
+
+  // Kirim email kredensial ke Admin
+  try {
+    const mailOptions = {
+      from: `"Nexa OS Support" <${process.env.SMTP_USER}>`,
+      to: adminEmail,
+      subject: `Selamat Datang di Nexa CRM - Kredensial Akses ${brand}`,
+      html: `
+        <h2>Halo, Admin ${brand}!</h2>
+        <p>Tenant Anda berhasil dibuat dan telah aktif. Berikut adalah kredensial akses untuk akun Super Admin Anda:</p>
+        <ul>
+          <li><strong>URL Login:</strong> <a href="http://localhost:3000/login">http://localhost:3000/login</a></li>
+          <li><strong>Username:</strong> ${adminUsername}</li>
+          <li><strong>Password:</strong> ${adminPassword}</li>
+        </ul>
+        <p>Harap segera login dan ubah password Anda demi keamanan.</p>
+        <br/>
+        <p>Terima kasih,</p>
+        <p>Tim Nexa OS</p>
+      `
+    };
+    await transporter.sendMail(mailOptions);
+    console.log(`[Provisioning] Kredensial admin berhasil dikirim ke ${adminEmail}`);
+  } catch (err) {
+    console.error(`[Provisioning] Gagal mengirim email kredensial ke ${adminEmail}:`, err.message);
   }
   
   return { tenantId, brand, adminUsername, adminPassword };

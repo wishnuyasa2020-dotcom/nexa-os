@@ -78,11 +78,11 @@ async function getBacklog(user, query = {}) {
   const isCRO = user.role === 'CRO';
   const search = query.search?.trim() ? `%${query.search.trim()}%` : null;
 
-  // Backlog condition per tabel
-  const blAS  = `(due_date IS NULL OR due_date = '' OR IFNULL(status_jadwal,'') IN ('','belum dijadwalkan','reschedule'))`;
-  const blASI = `(due_date IS NULL OR due_date = '' OR IFNULL(status_jadwal,'') IN ('','belum dijadwalkan','reschedule'))`;
-  const blHV  = `(due_date IS NULL OR due_date = '' OR IFNULL(status_jadwal,'') IN ('','belum dijadwalkan','reschedule'))`;
-  const blAE  = `(tanggal_rencana IS NULL OR tanggal_rencana = '' OR IFNULL(status_aktivitas,'') IN ('','belum dijadwalkan'))`;
+  // Backlog condition per tabel (tidak boleh hilang meski punya due_date selama belum masuk board)
+  const blAS  = `(IFNULL(status_jadwal,'') NOT IN ('dijadwalkan', 'Tidak ada jadwal', 'Selesai', 'Batal'))`;
+  const blASI = `(IFNULL(status_jadwal,'') NOT IN ('dijadwalkan', 'Tidak ada jadwal', 'Selesai', 'Batal'))`;
+  const blHV  = `(IFNULL(status_jadwal,'') NOT IN ('dijadwalkan', 'Tidak ada jadwal', 'Selesai', 'Batal'))`;
+  const blAE  = `(IFNULL(status_aktivitas,'') NOT IN ('dijadwalkan', 'Selesai', 'Batal'))`;
 
   // ── aktivitas_sekolah ──────────────────────────────────────────────────────
   const asParams = [mp];
@@ -98,7 +98,8 @@ async function getBacklog(user, query = {}) {
       next_action,
       status_terkini      AS status,
       pic                 AS owner,
-      marketing_period
+      marketing_period,
+      DATE_FORMAT(due_date, '%Y-%m-%d') AS date_val
     FROM aktivitas_sekolah
     WHERE ${asWhere.join(' AND ')}
     ORDER BY timestamp DESC
@@ -121,7 +122,8 @@ async function getBacklog(user, query = {}) {
       next_action,
       status_terkini      AS status,
       NULL                AS owner,
-      marketing_period
+      marketing_period,
+      DATE_FORMAT(due_date, '%Y-%m-%d') AS date_val
     FROM aktivitas_siswa
     WHERE ${asiWhere.join(' AND ')}
     ORDER BY timestamp DESC
@@ -141,7 +143,8 @@ async function getBacklog(user, query = {}) {
       next_action,
       status_terkini      AS status,
       NULL                AS owner,
-      marketing_period
+      marketing_period,
+      DATE_FORMAT(due_date, '%Y-%m-%d') AS date_val
     FROM home_visit
     WHERE ${hvWhere.join(' AND ')}
     ORDER BY timestamp DESC
@@ -162,7 +165,8 @@ async function getBacklog(user, query = {}) {
       tujuan_catatan      AS next_action,
       status_aktivitas    AS status,
       pj_aktivitas        AS owner,
-      marketing_period
+      marketing_period,
+      DATE_FORMAT(tanggal_rencana, '%Y-%m-%d') AS date_val
     FROM aktivitas_ekstra
     WHERE ${aeWhere.join(' AND ')}
     ORDER BY timestamp DESC
@@ -198,7 +202,7 @@ async function getBoardItems(user, query = {}) {
       referensi_id,
       jenis_agenda,
       judul,
-      tanggal,
+      DATE_FORMAT(tanggal, '%Y-%m-%d') AS tanggal,
       jam_mulai,
       jam_selesai,
       lokasi,
@@ -232,14 +236,14 @@ async function scheduleTask(user, body = {}) {
 
     // Ambil judul dari source table + Kunci baris (Row-level lock)
     const [srcRows] = await conn.query(
-      `SELECT ${nameCol} AS judul, ${dateCol} AS date_val FROM ${table} WHERE id = ? FOR UPDATE`,
+      `SELECT ${nameCol} AS judul, ${dateCol} AS date_val${statusCol ? `, ${statusCol} AS status_val` : ''} FROM ${table} WHERE id = ? FOR UPDATE`,
       [id]
     );
     if (!srcRows.length) throw new Error(`Task tidak ditemukan di ${table}: id=${id}`);
     
-    // Validasi Race Condition: Pastikan task belum dijadwalkan orang lain
-    if (srcRows[0].date_val !== null && srcRows[0].date_val !== '') {
-      throw new Error('Gagal: Task ini sudah dijadwalkan oleh pengguna lain (Race Condition dicegah).');
+    // Validasi Race Condition: Pastikan task belum dijadwalkan di board
+    if (statusCol && srcRows[0].status_val === 'dijadwalkan') {
+      throw new Error('Gagal: Task ini sudah ada di papan jadwal (Race Condition dicegah).');
     }
 
     const judul = srcRows[0].judul || '(tanpa judul)';
@@ -266,7 +270,27 @@ async function scheduleTask(user, body = {}) {
       );
     }
 
+    // SYNC parent tables for Tasklist
+    if (prefix === 'as') {
+      const match = judul.match(/^(SKL-\d+)/);
+      if (match) await conn.query(`UPDATE sekolah_periode SET due_date = ?, status_jadwal = 'dijadwalkan' WHERE id_sekolah = ? AND marketing_period = ?`, [tanggal, match[1], mp]);
+    } else if (prefix === 'asi' || prefix === 'hv') {
+      const match = judul.match(/^(STD-\d+)/);
+      if (match) await conn.query(`UPDATE siswa_periode SET due_date = ?, status_jadwal = 'dijadwalkan' WHERE id_siswa = ? AND marketing_period = ?`, [tanggal, match[1], mp]);
+    }
+
     await conn.commit();
+
+    // Trigger Google Calendar Sync (Async, doesn't block the response)
+    const calendarService = require('../calendar/calendar.service');
+    calendarService.syncEventToCalendar(user.id, {
+      summary: judul,
+      description: `Task ID: ${idAgenda}\nJenis: ${prefix}`,
+      date: tanggal // All-day event based on date
+    }).catch(err => {
+      console.error('[Calendar Sync] Failed in scheduleTask:', err.message);
+    });
+
     return {
       id_agenda: idAgenda,
       judul,
@@ -316,6 +340,18 @@ async function rescheduleTask(user, agendaId, body = {}) {
       [newTanggal, agenda.referensi_id]
     );
 
+    // SYNC parent tables for Tasklist
+    const prefix = agenda.jenis_agenda;
+    const judul = agenda.judul;
+    const mp = agenda.marketing_period;
+    if (prefix === 'as') {
+      const match = judul.match(/^(SKL-\d+)/);
+      if (match) await conn.query(`UPDATE sekolah_periode SET due_date = ? WHERE id_sekolah = ? AND marketing_period = ?`, [newTanggal, match[1], mp]);
+    } else if (prefix === 'asi' || prefix === 'hv') {
+      const match = judul.match(/^(STD-\d+)/);
+      if (match) await conn.query(`UPDATE siswa_periode SET due_date = ? WHERE id_siswa = ? AND marketing_period = ?`, [newTanggal, match[1], mp]);
+    }
+
     await conn.commit();
     return { success: true, newTanggal };
   } catch (err) {
@@ -358,6 +394,18 @@ async function unscheduleTask(user, agendaId) {
         `UPDATE ${table} SET ${dateCol} = NULL WHERE id = ?`,
         [agenda.referensi_id]
       );
+    }
+
+    // SYNC parent tables for Tasklist
+    const prefix = agenda.jenis_agenda;
+    const judul = agenda.judul;
+    const mp = agenda.marketing_period;
+    if (prefix === 'as') {
+      const match = judul.match(/^(SKL-\d+)/);
+      if (match) await conn.query(`UPDATE sekolah_periode SET due_date = NULL, status_jadwal = 'Menunggu Penjadwalan' WHERE id_sekolah = ? AND marketing_period = ?`, [match[1], mp]);
+    } else if (prefix === 'asi' || prefix === 'hv') {
+      const match = judul.match(/^(STD-\d+)/);
+      if (match) await conn.query(`UPDATE siswa_periode SET due_date = NULL, status_jadwal = 'Menunggu Penjadwalan' WHERE id_siswa = ? AND marketing_period = ?`, [match[1], mp]);
     }
 
     await conn.commit();

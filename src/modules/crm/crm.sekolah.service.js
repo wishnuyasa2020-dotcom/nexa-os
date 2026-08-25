@@ -356,6 +356,18 @@ async function tambahSekolah(data, user) {
     [recId, mp, newId, pj, now, now, now]
   );
 
+  // Buat initial aktivitas supaya masuk ke backlog Weekly Planning
+  const idSekolahNama = `${newId}-${data.namaSekolah}`;
+  await pool.query(
+    `INSERT INTO aktivitas_sekolah
+       (marketing_period, \`timestamp\`, tanggal, id_sekolah_nama,
+        sekolah_aktif, aktivitas, pic, wa_pic, jabatan_pic,
+        hasil, status_terkini, next_action, due_date, status_jadwal,
+        catatan, jumlah_siswa, alasan_tidak_bisa_sosialisasi)
+     VALUES (?, ?, NULL, ?, 'Belum Diketahui', 'Input Database', '', '', '', 'Sekolah Baru Ditambahkan', 'Belum Visit', 'Visit Awal', NULL, 'Menunggu Penjadwalan', 'Otomatis dibuat saat penambahan sekolah.', NULL, '')`,
+    [mp, now, idSekolahNama]
+  );
+
   // Increment Kuota setelah sukses
   await _incrementUsedSekolah(tenantId, 1).catch(e => console.error("Gagal increment used_sekolah:", e));
 
@@ -587,6 +599,18 @@ async function inputAktivitas(sekolahId, data, user) {
     await pool.query(`UPDATE master_sekolah SET ${msClauses.join(', ')} WHERE id_sekolah = ?`, msParams);
   }
 
+  // Sync to Google Calendar
+  if (dueDate) {
+    const calendarService = require('./calendar/calendar.service');
+    calendarService.syncEventToCalendar(user.id, {
+      summary: idSekolahNama,
+      description: `Sekolah: ${msRow?.nama_sekolah || ''}\nAktivitas: ${data.jenisAktivitas}\nCatatan: ${data.catatan || ''}`,
+      date: dueDate.toISOString().split('T')[0]
+    }).catch(err => {
+      console.error('[Calendar Sync] Failed in inputAktivitas:', err.message);
+    });
+  }
+
   return detailSekolah(sekolahId, user, { period: mp });
 }
 
@@ -621,6 +645,19 @@ async function buatAktivitasEkstra(sekolahId, data, user) {
      VALUES (?, ?, ?, ?, ?, ?, ?, 'Direncanakan', ?, ?)`,
     [newId, mp, sekolahId, data.jenisAktivitas, data.tanggalRencana, data.tujuanCatatan, pj, now, now]
   );
+
+  // Sync to Google Calendar
+  const calendarService = require('./calendar/calendar.service');
+  const [[ms]] = await pool.query('SELECT nama_sekolah FROM master_sekolah WHERE id_sekolah = ? LIMIT 1', [sekolahId]);
+  const judul = `SKL-${sekolahId.replace('SKL-', '')}-${ms?.nama_sekolah || ''}`;
+  
+  calendarService.syncEventToCalendar(user.id, {
+    summary: judul,
+    description: `Aktivitas Ekstra\nJenis: ${data.jenisAktivitas}\nTujuan: ${data.tujuanCatatan}`,
+    date: data.tanggalRencana
+  }).catch(err => {
+    console.error('[Calendar Sync] Failed in buatAktivitasEkstra:', err.message);
+  });
 
   return { id: newId, statusAktivitas: 'Direncanakan' };
 }

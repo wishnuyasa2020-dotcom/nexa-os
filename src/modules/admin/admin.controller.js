@@ -101,8 +101,8 @@ async function activity(req, res) {
  */
 async function addTenant(req, res) {
   try {
-    const { brand, tier, maxCro, dbHost, dbName, dbUser, dbPass } = req.body;
-    if (!brand || !dbHost || !dbName || !dbUser || !dbPass) {
+    const { brand, tier, maxCro, dbHost, dbName, dbUser, dbPass, adminEmail } = req.body;
+    if (!brand || !dbHost || !dbName || !dbUser || !dbPass || !adminEmail) {
       return res.status(400).json({ status: 'error', message: 'Semua field wajib diisi' });
     }
     const data = await adminService.provisionNewTenant(req.body);
