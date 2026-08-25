@@ -1,7 +1,11 @@
 'use strict';
 
 const mysql = require('mysql2/promise');
+const { AsyncLocalStorage } = require('async_hooks');
 require('dotenv').config();
+
+const tenantStorage = new AsyncLocalStorage();
+const tenantPoolsCache = new Map();
 
 /**
  * MySQL Connection Pool
@@ -72,4 +76,58 @@ async function testConnection() {
   }
 }
 
-module.exports = { mainPool, pool, getDynamicPool, testConnection };
+/**
+ * Fungsi untuk mendapatkan pool tenant (dari cache atau buat baru)
+ */
+async function getTenantPoolFromId(tenantId) {
+  if (!tenantId) return null;
+  if (tenantPoolsCache.has(tenantId)) return tenantPoolsCache.get(tenantId);
+  
+  const [rows] = await mainPool.query('SELECT * FROM tenant_databases WHERE tenant_id = ?', [tenantId]);
+  if (rows.length === 0) return null;
+  
+  const config = rows[0];
+  const tPool = getDynamicPool({
+    host: config.db_host,
+    port: 3306,
+    user: config.db_user,
+    password: config.db_password,
+    database: config.db_name
+  });
+  tenantPoolsCache.set(tenantId, tPool);
+  return tPool;
+}
+
+// ── PROXY INTERCEPTION ──────────────────────────────────────────
+
+const originalQuery = pool.query.bind(pool);
+pool.query = async function(...args) {
+  const tenantId = tenantStorage.getStore();
+  if (tenantId) {
+    const tPool = await getTenantPoolFromId(tenantId);
+    if (tPool) return tPool.query(...args);
+  }
+  return originalQuery(...args);
+};
+
+const originalExecute = pool.execute.bind(pool);
+pool.execute = async function(...args) {
+  const tenantId = tenantStorage.getStore();
+  if (tenantId) {
+    const tPool = await getTenantPoolFromId(tenantId);
+    if (tPool) return tPool.execute(...args);
+  }
+  return originalExecute(...args);
+};
+
+const originalGetConnection = pool.getConnection.bind(pool);
+pool.getConnection = async function(...args) {
+  const tenantId = tenantStorage.getStore();
+  if (tenantId) {
+    const tPool = await getTenantPoolFromId(tenantId);
+    if (tPool) return tPool.getConnection(...args);
+  }
+  return originalGetConnection(...args);
+};
+
+module.exports = { mainPool, pool, getDynamicPool, testConnection, tenantStorage };

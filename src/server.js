@@ -11,7 +11,7 @@ async function start() {
   // Uji koneksi database sebelum server menerima request
   await testConnection();
 
-  app.listen(PORT, () => {
+  app.listen(PORT, '127.0.0.1', () => {
     console.log('');
     console.log('╔══════════════════════════════════════════╗');
     console.log('║       Nexa OS Backend — Running          ║');

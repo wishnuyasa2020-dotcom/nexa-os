@@ -16,7 +16,7 @@ const { pool } = require('../../../config/database');
 // ── Password helpers (kompatibel dengan GAS Auth.gs) ────────────
 
 function _generateSalt() {
-  return crypto.randomBytes(16).toString('hex');
+  return crypto.randomBytes(10).toString('hex');
 }
 
 /**
@@ -95,10 +95,46 @@ function verifyJWT(token) {
  * Login user — kompatibel dengan password lama GAS (SHA256+salt) maupun plaintext.
  */
 async function login(username, password) {
-  const [[rows]] = await pool.query(
+  let rows = null;
+  let isTenant = false;
+  let tenantId = null;
+  let activeConn = null;
+
+  // 1. Coba cari di default pool (crmdemo)
+  const [[defaultUser]] = await pool.query(
     'SELECT * FROM users WHERE username = ? LIMIT 1',
     [String(username).trim()]
   );
+  
+  if (defaultUser) {
+    rows = defaultUser;
+  } else {
+    // 2. Jika tidak ketemu, cari di seluruh tenant DB (Multi-tenant login)
+    const { mainPool } = require('../../../config/database');
+    const mysql = require('mysql2/promise');
+    
+    const [tenants] = await mainPool.query('SELECT * FROM tenant_databases');
+    for (const t of tenants) {
+      try {
+        const conn = await mysql.createConnection({
+          host: t.db_host, port: 3306, user: t.db_user, password: t.db_password, database: t.db_name
+        });
+        const [[tUser]] = await conn.query('SELECT * FROM users WHERE username = ? LIMIT 1', [String(username).trim()]);
+        
+        if (tUser) {
+          rows = tUser;
+          isTenant = true;
+          tenantId = t.tenant_id;
+          activeConn = conn; // keep connection open for activePeriod query
+          break;
+        } else {
+          await conn.end();
+        }
+      } catch (err) {
+        console.warn('Gagal cek login ke tenant:', t.tenant_id, err.message);
+      }
+    }
+  }
 
   if (!rows) {
     return { success: false, message: 'Username atau password salah.' };
@@ -122,10 +158,17 @@ async function login(username, password) {
       try {
         const newSalt = _generateSalt();
         const newHash = _hashSHA256(password, newSalt);
-        await pool.query(
-          'UPDATE users SET password = ?, salt = ? WHERE username = ?',
-          [newHash, newSalt, String(username).trim()]
-        );
+        if (isTenant && activeConn) {
+          await activeConn.query(
+            'UPDATE users SET password = ?, salt = ? WHERE username = ?',
+            [newHash, newSalt, String(username).trim()]
+          );
+        } else {
+          await pool.query(
+            'UPDATE users SET password = ?, salt = ? WHERE username = ?',
+            [newHash, newSalt, String(username).trim()]
+          );
+        }
         console.log('[Auth] Password migrated for user:', username);
       } catch (migErr) {
         console.warn('[Auth] Gagal migrasi password:', migErr.message);
@@ -145,12 +188,21 @@ async function login(username, password) {
   // Ambil periode aktif
   let activePeriod = '-';
   try {
-    const [[periodRow]] = await pool.query(
-      'SELECT nama_period FROM marketing_period WHERE status = ? ORDER BY created_date DESC LIMIT 1',
-      ['aktif']
-    );
+    const q = 'SELECT nama_period FROM marketing_period WHERE status = ? ORDER BY created_date DESC LIMIT 1';
+    let periodRow;
+    if (isTenant && activeConn) {
+      const [res] = await activeConn.query(q, ['aktif']);
+      periodRow = res[0];
+    } else {
+      const [res] = await pool.query(q, ['aktif']);
+      periodRow = res[0];
+    }
     if (periodRow) activePeriod = periodRow.nama_period;
   } catch (_) {}
+  
+  if (activeConn) {
+    await activeConn.end();
+  }
 
   const user = {
     username: String(rows.username).trim(),
@@ -158,7 +210,12 @@ async function login(username, password) {
     role:     String(rows.role    || '').trim(),
   };
 
-  const token = _signJWT({ ...user, selectedPeriod: activePeriod });
+  const payload = { ...user, selectedPeriod: activePeriod };
+  if (isTenant) {
+    payload.tenantId = tenantId;
+  }
+  
+  const token = _signJWT(payload);
 
   return {
     success: true,

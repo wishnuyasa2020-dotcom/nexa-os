@@ -11,12 +11,15 @@ const { pool, mainPool } = require('../../config/database');
 // HELPER: Cek Kuota Siswa di Main Registry
 // ─────────────────────────────────────────────────────────────────────────────
 async function _checkSiswaLimits(requiredCount = 1) {
-  const dbName = process.env.DB_NAME;
+  const { tenantStorage } = require('../../config/database');
+  let tenantId = tenantStorage.getStore();
   
-  // 1. Get tenant_id from tenant_databases
-  const [dbRows] = await mainPool.query("SELECT tenant_id FROM tenant_databases WHERE db_name = ?", [dbName]);
-  if (dbRows.length === 0) return { tenantId: null }; 
-  const tenantId = dbRows[0].tenant_id;
+  if (!tenantId) {
+    const dbName = process.env.DB_NAME;
+    const [dbRows] = await mainPool.query("SELECT tenant_id FROM tenant_databases WHERE db_name = ?", [dbName]);
+    if (dbRows.length === 0) return { tenantId: null }; 
+    tenantId = dbRows[0].tenant_id;
+  }
 
   // 2. Get limits from tenants
   const [tenantRows] = await mainPool.query("SELECT limit_siswa, used_siswa FROM tenants WHERE tenant_id = ?", [tenantId]);

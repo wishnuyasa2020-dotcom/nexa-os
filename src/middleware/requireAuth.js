@@ -9,6 +9,8 @@ const { verifyJWT } = require('../modules/crm/auth/auth.service');
  * Usage:
  *   router.get('/protected', requireAuth, ctrl.handler);
  */
+const { tenantStorage } = require('../config/database');
+
 function requireAuth(req, res, next) {
   const header = req.headers['authorization'] || '';
   const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
@@ -19,7 +21,12 @@ function requireAuth(req, res, next) {
 
   try {
     req.user = verifyJWT(token);
-    next();
+    
+    // Inject tenantStorage jika tenantId ada di payload
+    const tenantId = req.user.tenantId || null;
+    tenantStorage.run(tenantId, () => {
+      next();
+    });
   } catch (err) {
     console.error('JWT Verification failed:', err.message);
     const partsCount = (token || '').split('.').length;

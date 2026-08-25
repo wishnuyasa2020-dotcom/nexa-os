@@ -361,13 +361,19 @@ async function getDashboardSummary(user, marketingPeriodArg, monthFilter = 'All'
   const siapDaftar = (funnelSiswaMap['Siap Daftar'] || 0) + (funnelSiswaMap['Terdaftar'] || 0);
   const calonProspek = (funnelSiswaMap['Calon Prospek'] || 0) + prospekAktif;
 
-  const { mainPool } = require('../../config/database');
+  const { mainPool, tenantStorage } = require('../../config/database');
   let quota = { tier: 'Free', limitSiswa: 300, usedSiswa: 0, limitSekolah: 10, usedSekolah: 0, limitUser: 4, usedUser: 0 };
   try {
-    const dbName = process.env.DB_NAME;
-    const [dbRows] = await mainPool.query("SELECT tenant_id FROM tenant_databases WHERE db_name = ?", [dbName]);
-    if (dbRows.length > 0) {
-      const [tenantRows] = await mainPool.query("SELECT tier, limit_siswa, used_siswa, limit_sekolah, used_sekolah, max_admin, max_manager, max_chief_cro, max_cro, addon_cro FROM tenants WHERE tenant_id = ?", [dbRows[0].tenant_id]);
+    let tenantIdForQuota = tenantStorage.getStore();
+    
+    if (!tenantIdForQuota) {
+      const dbName = process.env.DB_NAME;
+      const [dbRows] = await mainPool.query("SELECT tenant_id FROM tenant_databases WHERE db_name = ?", [dbName]);
+      if (dbRows.length > 0) tenantIdForQuota = dbRows[0].tenant_id;
+    }
+
+    if (tenantIdForQuota) {
+      const [tenantRows] = await mainPool.query("SELECT tier, limit_siswa, used_siswa, limit_sekolah, used_sekolah, max_admin, max_manager, max_chief_cro, max_cro, addon_cro FROM tenants WHERE tenant_id = ?", [tenantIdForQuota]);
       if (tenantRows.length > 0) {
         const t = tenantRows[0];
         const limitUser = (t.max_admin || 1) + (t.max_manager || 1) + (t.max_chief_cro || 1) + (t.max_cro || 1) + (t.addon_cro || 0);

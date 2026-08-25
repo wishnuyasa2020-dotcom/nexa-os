@@ -28,10 +28,15 @@ const { pool, mainPool } = require('../../config/database');
 // HELPER: Cek Kuota Sekolah di Main Registry
 // ─────────────────────────────────────────────────────────────────────────────
 async function _checkSekolahLimits(requiredCount = 1) {
-  const dbName = process.env.DB_NAME;
-  const [dbRows] = await mainPool.query("SELECT tenant_id FROM tenant_databases WHERE db_name = ?", [dbName]);
-  if (dbRows.length === 0) return { tenantId: null }; 
-  const tenantId = dbRows[0].tenant_id;
+  const { tenantStorage } = require('../../config/database');
+  let tenantId = tenantStorage.getStore();
+  
+  if (!tenantId) {
+    const dbName = process.env.DB_NAME;
+    const [dbRows] = await mainPool.query("SELECT tenant_id FROM tenant_databases WHERE db_name = ?", [dbName]);
+    if (dbRows.length === 0) return { tenantId: null }; 
+    tenantId = dbRows[0].tenant_id;
+  }
 
   const [tenantRows] = await mainPool.query("SELECT limit_sekolah, used_sekolah FROM tenants WHERE tenant_id = ?", [tenantId]);
   if (tenantRows.length === 0) return { tenantId };

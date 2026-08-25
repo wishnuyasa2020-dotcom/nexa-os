@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('crypto');
+const mysql = require('mysql2/promise');
 const { pool, mainPool } = require('../../config/database');
 
 /**
@@ -74,47 +76,66 @@ async function getOverview() {
 }
 
 async function getTenant() {
-  // Ambil profil tenant dari Main DB
+  // Ambil profil semua tenant dari Main DB
   const [rows] = await mainPool.query(`
     SELECT tenant_id, brand_name, tier, status, max_cro, current_period_start, current_period_end 
     FROM tenants 
-    LIMIT 1
+    ORDER BY created_at ASC
   `);
   
-  if (rows.length === 0) throw new Error("Belum ada tenant di Main DB.");
-  const d = rows[0];
+  if (rows.length === 0) return [];
 
-  // Ambil statistik operasional dari Tenant DB (pool)
-  const [[cro]] = await pool.query("SELECT COUNT(*) AS cnt FROM users WHERE LOWER(role)='cro' AND LOWER(status)='aktif'");
-  const [[siswa]] = await pool.query('SELECT COUNT(*) AS cnt FROM master_siswa');
-  const [[sekolah]] = await pool.query('SELECT COUNT(*) AS cnt FROM master_sekolah');
+  const results = [];
+  
+  for (const d of rows) {
+    let croCnt = 0, siswaCnt = 0, sekolahCnt = 0;
+    
+    try {
+      const [[dbInfo]] = await mainPool.query("SELECT db_host, db_name, db_user, db_password FROM tenant_databases WHERE tenant_id = ?", [d.tenant_id]);
+      if (dbInfo) {
+         const tDb = await mysql.createConnection({
+            host: dbInfo.db_host, user: dbInfo.db_user, password: dbInfo.db_password, database: dbInfo.db_name
+         });
+         const [[cro]] = await tDb.query("SELECT COUNT(*) AS cnt FROM users WHERE LOWER(role)='cro' AND LOWER(status)='aktif'");
+         const [[siswa]] = await tDb.query("SELECT COUNT(*) AS cnt FROM master_siswa");
+         const [[sekolah]] = await tDb.query("SELECT COUNT(*) AS cnt FROM master_sekolah");
+         croCnt = parseInt(cro.cnt) || 0;
+         siswaCnt = parseInt(siswa.cnt) || 0;
+         sekolahCnt = parseInt(sekolah.cnt) || 0;
+         await tDb.end();
+      }
+    } catch (e) {
+      console.error("Error fetching stats for tenant " + d.tenant_id, e);
+    }
+    
+    let activePeriod = '2025/2026';
+    if (d.current_period_start) {
+      const yr = new Date(d.current_period_start).getFullYear();
+      activePeriod = yr + '/' + (yr + 1);
+    }
 
-  // Format periode (ex: 2025/2026)
-  let activePeriod = '2025/2026';
-  if (d.current_period_start) {
-    const yr = new Date(d.current_period_start).getFullYear();
-    activePeriod = yr + '/' + (yr + 1);
+    results.push({
+      tenantId: d.tenant_id,
+      brandName: d.brand_name,
+      appName: 'Derma CRM',
+      tier: d.tier,
+      status: d.status,
+      primaryColor: '#0066cc',
+      activeCro: croCnt,
+      totalCro: croCnt,
+      maxCro: d.max_cro || 10,
+      activePeriod: activePeriod,
+      periodStart: d.current_period_start,
+      periodEnd: d.current_period_end,
+      siswaAktif: siswaCnt,
+      sekolahAktif: sekolahCnt,
+      activeTemplates: 3,
+      lastIncomingMsg: null,
+      whatsappStatus: 'CONNECTED'
+    });
   }
 
-  return {
-    tenantId: d.tenant_id,
-    brandName: d.brand_name,
-    appName: 'Derma CRM',
-    tier: d.tier,
-    status: d.status,
-    primaryColor: '#0066cc',
-    activeCro: parseInt(cro.cnt) || 0,
-    totalCro: parseInt(cro.cnt) || 0,
-    maxCro: d.max_cro || 10,
-    activePeriod: activePeriod,
-    periodStart: d.current_period_start,
-    periodEnd: d.current_period_end,
-    siswaAktif: parseInt(siswa.cnt) || 0,
-    sekolahAktif: parseInt(sekolah.cnt) || 0,
-    activeTemplates: 3,
-    lastIncomingMsg: null,
-    whatsappStatus: 'CONNECTED'
-  };
+  return results;
 }
 
 async function getUsageStats() {
@@ -230,4 +251,102 @@ async function getActivity() {
   return activities.slice(0, 10);
 }
 
-module.exports = { getOverview, getTenant, getUsageStats, getUserList, getSystemHealth, getActivity };
+async function provisionNewTenant(payload) {
+  const { brand, tier, maxCro, dbHost, dbName, dbUser, dbPass } = payload;
+  
+  // 1. Generate tenant_id from brand name
+  let tenantId = brand.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  if (!tenantId) tenantId = 'tenant-' + Date.now();
+  
+  // 2. Determine limits based on Tier
+  let limitSiswa = 1000;
+  let limitSekolah = 20;
+  let maxAdmin = 1, maxManager = 1, maxChiefCro = 1;
+  
+  if (tier === 'Free') { limitSiswa = 300; limitSekolah = 10; maxAdmin=1; maxManager=1; maxChiefCro=1; }
+  else if (tier === 'Pro') { limitSiswa = 1000; limitSekolah = 20; maxAdmin=1; maxManager=1; maxChiefCro=1; }
+  else if (tier === 'Business') { limitSiswa = 2500; limitSekolah = 41; maxAdmin=1; maxManager=1; maxChiefCro=3; }
+  else if (tier === 'Enterprise') { limitSiswa = 8333; limitSekolah = 166; maxAdmin=1; maxManager=3; maxChiefCro=5; }
+  
+  // Check if tenant_id already exists
+  const [exist] = await mainPool.query("SELECT tenant_id FROM tenants WHERE tenant_id = ?", [tenantId]);
+  if (exist.length > 0) {
+    tenantId += '-' + Math.floor(Math.random()*1000);
+  }
+
+  // Insert into tenants
+  await mainPool.query(`
+    INSERT INTO tenants (tenant_id, brand_name, tier, status, limit_siswa, limit_sekolah, max_admin, max_manager, max_chief_cro, max_cro)
+    VALUES (?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?)
+  `, [tenantId, brand, tier, limitSiswa, limitSekolah, maxAdmin, maxManager, maxChiefCro, maxCro]);
+  
+  // Insert into tenant_databases
+  await mainPool.query(`
+    INSERT INTO tenant_databases (tenant_id, db_host, db_name, db_user, db_password)
+    VALUES (?, ?, ?, ?, ?)
+  `, [tenantId, dbHost, dbName, dbUser, dbPass]);
+  
+  // 3. Auto-Migration (Copy Schema from default DB)
+  console.log(`[Provisioning] Connecting to new tenant DB: ${dbName} at ${dbHost}...`);
+  const dbBaru = await mysql.createConnection({
+    host: dbHost, port: 3306, user: dbUser, password: dbPass, database: dbName
+  });
+  let adminUsername, adminPassword;
+  try {
+    const [tables] = await pool.query('SHOW TABLES');
+    const tableKey = Object.keys(tables[0])[0];
+    
+    // Disable foreign key checks to prevent errno 150
+    await dbBaru.query('SET FOREIGN_KEY_CHECKS = 0');
+    
+    for (const row of tables) {
+      const tableName = row[tableKey];
+      console.log(`[Provisioning] Copying schema for table: ${tableName}`);
+      const [createRes] = await pool.query(`SHOW CREATE TABLE \`${tableName}\``);
+      let createSql = createRes[0]['Create Table'];
+      
+      await dbBaru.query(`DROP TABLE IF EXISTS \`${tableName}\``);
+      await dbBaru.query(createSql);
+    }
+    
+    // Re-enable foreign key checks
+    await dbBaru.query('SET FOREIGN_KEY_CHECKS = 1');
+    
+    // Create Admin user with generated credentials
+    adminUsername = 'admin_' + brand.toLowerCase().replace(/[^a-z0-9]/g, '');
+    adminPassword = 'Nexa' + Math.floor(1000 + Math.random() * 9000) + '!';
+    
+    // Generate salt and hash (SHA256) compatible with Nexa Auth (varchar 20 limit)
+    const salt = crypto.randomBytes(10).toString('hex');
+    const hash = crypto.createHash('sha256').update(String(adminPassword) + String(salt)).digest('hex');
+
+    await dbBaru.query(
+      `INSERT INTO users (username, password, salt, nama, role, status) VALUES (?, ?, ?, 'Super Admin', 'Admin', 'aktif')`,
+      [adminUsername, hash, salt]
+    );
+
+  } finally {
+    await dbBaru.end();
+  }
+  
+  return { tenantId, brand, adminUsername, adminPassword };
+}
+
+async function addCroQuota(payload) {
+  const { tenantId, tambahanCro } = payload;
+  const num = parseInt(tambahanCro);
+  
+  if (!num || num <= 0) throw new Error("Jumlah tambahan tidak valid");
+  
+  // Ambil data sekarang
+  const [rows] = await mainPool.query("SELECT max_cro FROM tenants WHERE tenant_id = ?", [tenantId]);
+  if (rows.length === 0) throw new Error("Tenant tidak ditemukan");
+  
+  const currentMax = rows[0].max_cro || 0;
+  const newMax = currentMax + num;
+  
+  await mainPool.query("UPDATE tenants SET max_cro = ? WHERE tenant_id = ?", [newMax, tenantId]);
+  return { tenantId, previousMax: currentMax, newMax };
+}
+
+module.exports = { getOverview, getTenant, getUsageStats, getUserList, getSystemHealth, getActivity, provisionNewTenant, addCroQuota };

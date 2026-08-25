@@ -96,4 +96,38 @@ async function activity(req, res) {
   }
 }
 
-module.exports = { requireAdminKey, ping, overview, tenant, usage, users, health, activity };
+/**
+ * POST /api/admin/tenant
+ */
+async function addTenant(req, res) {
+  try {
+    const { brand, tier, maxCro, dbHost, dbName, dbUser, dbPass } = req.body;
+    if (!brand || !dbHost || !dbName || !dbUser || !dbPass) {
+      return res.status(400).json({ status: 'error', message: 'Semua field wajib diisi' });
+    }
+    const data = await adminService.provisionNewTenant(req.body);
+    res.json({ status: 'ok', data, message: 'Tenant berhasil diprovisioning' });
+  } catch (err) {
+    console.error('addTenant Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * POST /api/admin/tenant/addon
+ */
+async function addonCro(req, res) {
+  try {
+    const { tenantId, tambahanCro } = req.body;
+    if (!tenantId || !tambahanCro || tambahanCro <= 0) {
+      return res.status(400).json({ status: 'error', message: 'Input tidak valid' });
+    }
+    const data = await adminService.addCroQuota(req.body);
+    res.json({ status: 'ok', data, message: 'Kuota berhasil ditambah' });
+  } catch (err) {
+    console.error('addonCro Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+module.exports = { requireAdminKey, ping, overview, tenant, addTenant, addonCro, usage, users, health, activity };
