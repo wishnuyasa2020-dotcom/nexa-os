@@ -17,7 +17,7 @@ code = code.replace(/data\.rencana_lulus \|\| rows\[0\]\.rencana_lulus,\n\s+prio
 code = code.replace(/UPDATE siswa_periode SET pj_cro = \? WHERE id_siswa = \? AND marketing_period = \?/, 'UPDATE siswa_periode SET cro = ?, prioritas = ? WHERE id_siswa = ? AND marketing_period = ?');
 code = code.replace(/\[data\.pj_cro, id, mp\]/, '[data.pj_cro, prioritasBaru, id, mp]');
 
-code = code.replace(/INSERT INTO master_siswa \(id, id_sekolah, nama_lengkap, no_wa, kelas, minat_awal, rencana_lulus, prioritas\)/g, 'INSERT INTO master_siswa (id_siswa, id_sekolah, nama_lengkap, wa, kelas, minat_awal, rencana_lulus)');
+code = code.replace(/INSERT INTO master_siswa \(id, id_sekolah, nama_lengkap, no_wa, kelas, minat_awal, rencana_lulus, prioritas\)/g, 'INSERT INTO master_siswa (id_siswa, id_sekolah, nama_lengkap, wa, kelas_id, minat_awal, rencana_lulus)');
 code = code.replace(/row\.rencana_lulus \|\| 'Belum Tahu', prioritas\]\)/g, "row.rencana_lulus || 'Belum Tahu'])");
 code = code.replace(/data\.rencana_lulus \|\| 'Belum Tahu', prioritas\]\)/, "data.rencana_lulus || 'Belum Tahu'])");
 

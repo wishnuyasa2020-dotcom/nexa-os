@@ -1,20 +1,21 @@
-const mysql = require('mysql2/promise');
+const pool = require('./src/config/database').pool;
+// if pool is not exported like that, let's just use whatever is in auth.service.js
 
-async function test() {
+async function check() {
   try {
-    const conn = await mysql.createConnection({
-      host: 'srv1412.hstgr.io',
-      port: 3306,
-      user: 'u294320793_admindemo',
-      password: '1379502026Ok!',
-      database: 'u294320793_crmdemo'
-    });
-    console.log('Success connection!');
-    const [rows] = await conn.query('SHOW TABLES');
-    console.log('Tables:', rows);
-    await conn.end();
-  } catch (err) {
-    console.error('Error:', err.message);
+    const [[user]] = await pool.query('SELECT * FROM users LIMIT 1');
+    console.log("Users schema:", Object.keys(user));
+    
+    // Test forgot password query
+    await pool.query(
+      'UPDATE users SET reset_password_token = ?, reset_password_expires = ? WHERE id = ?',
+      ['token', Date.now(), user.id]
+    );
+    console.log("Update success!");
+  } catch(e) {
+    console.error("Error:", e);
+  } finally {
+    process.exit();
   }
 }
-test();
+check();
