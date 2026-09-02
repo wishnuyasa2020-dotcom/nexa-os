@@ -14,6 +14,7 @@ router.get('/tenant', ctrl.tenant);
 router.post('/tenant', ctrl.addTenant);
 router.post('/tenant/addon', ctrl.addonCro);
 router.put('/tenant/tier', ctrl.updateTier);
+router.put('/tenant/whatsapp', ctrl.updateWhatsapp);
 router.get('/usage', ctrl.usage);
 router.get('/users', ctrl.users);
 router.get('/health', ctrl.health);

@@ -101,7 +101,7 @@ async function activity(req, res) {
  */
 async function addTenant(req, res) {
   try {
-    const { brand, tier, maxCro, dbHost, dbName, dbUser, dbPass, adminEmail } = req.body;
+    const { brand, tier, maxCro, dbHost, dbName, dbUser, dbPass, adminEmail, whatsappPhoneId } = req.body;
     if (!brand || !dbHost || !dbName || !dbUser || !dbPass || !adminEmail) {
       return res.status(400).json({ status: 'error', message: 'Semua field wajib diisi' });
     }
@@ -148,6 +148,23 @@ async function updateTier(req, res) {
 }
 
 /**
+ * PUT /api/admin/tenant/whatsapp
+ */
+async function updateWhatsapp(req, res) {
+  try {
+    const { tenantId, whatsappPhoneId } = req.body;
+    if (!tenantId || !whatsappPhoneId) {
+      return res.status(400).json({ status: 'error', message: 'Input tidak valid' });
+    }
+    const data = await adminService.updateTenantWhatsappId(req.body);
+    res.json({ status: 'ok', data, message: 'WhatsApp Phone ID berhasil diubah' });
+  } catch (err) {
+    console.error('updateWhatsapp Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
  * GET /api/admin/templates/stats
  * Statistik template cross-tenant (read-only, nexamos-admin)
  */
@@ -174,4 +191,4 @@ async function templatesByTenant(req, res) {
   }
 }
 
-module.exports = { requireAdminKey, ping, overview, tenant, addTenant, addonCro, updateTier, usage, users, health, activity, templateStats, templatesByTenant };
+module.exports = { requireAdminKey, ping, overview, tenant, addTenant, addonCro, updateTier, updateWhatsapp, usage, users, health, activity, templateStats, templatesByTenant };

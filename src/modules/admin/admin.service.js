@@ -89,7 +89,7 @@ async function getOverview() {
 async function getTenant() {
   // Ambil profil semua tenant dari Main DB
   const [rows] = await mainPool.query(`
-    SELECT tenant_id, brand_name, tier, status, max_cro, current_period_start, current_period_end 
+    SELECT tenant_id, brand_name, tier, status, max_cro, current_period_start, current_period_end, whatsapp_phone_id 
     FROM tenants 
     ORDER BY created_at ASC
   `);
@@ -142,7 +142,8 @@ async function getTenant() {
       sekolahAktif: sekolahCnt,
       activeTemplates: 3,
       lastIncomingMsg: null,
-      whatsappStatus: 'CONNECTED'
+      whatsappStatus: 'CONNECTED',
+      whatsappPhoneId: d.whatsapp_phone_id || ''
     });
   }
 
@@ -263,7 +264,7 @@ async function getActivity() {
 }
 
 async function provisionNewTenant(payload) {
-  const { brand, tier, maxCro, dbHost, dbName, dbUser, dbPass, adminEmail } = payload;
+  const { brand, tier, maxCro, dbHost, dbName, dbUser, dbPass, adminEmail, whatsappPhoneId } = payload;
 
   // 1. Generate tenant_id from brand name
   let tenantId = brand.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -287,9 +288,9 @@ async function provisionNewTenant(payload) {
 
   // Insert into tenants
   await mainPool.query(`
-    INSERT INTO tenants (tenant_id, brand_name, tier, status, limit_siswa, limit_sekolah, max_admin, max_manager, max_chief_cro, max_cro)
-    VALUES (?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?)
-  `, [tenantId, brand, tier, limitSiswa, limitSekolah, maxAdmin, maxManager, maxChiefCro, maxCro]);
+    INSERT INTO tenants (tenant_id, brand_name, tier, status, limit_siswa, limit_sekolah, max_admin, max_manager, max_chief_cro, max_cro, whatsapp_phone_id)
+    VALUES (?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, ?)
+  `, [tenantId, brand, tier, limitSiswa, limitSekolah, maxAdmin, maxManager, maxChiefCro, maxCro, whatsappPhoneId || null]);
 
   // Insert into tenant_databases
   await mainPool.query(`
@@ -417,6 +418,18 @@ async function updateTenantTier(payload) {
   return { tenantId, previousTier: currentTier, newTier: tier };
 }
 
+async function updateTenantWhatsappId(payload) {
+  const { tenantId, whatsappPhoneId } = payload;
+  if (!tenantId || !whatsappPhoneId) throw new Error("Input tidak valid");
+  
+  const [rows] = await mainPool.query("SELECT brand_name FROM tenants WHERE tenant_id = ?", [tenantId]);
+  if (rows.length === 0) throw new Error("Tenant tidak ditemukan");
+  
+  await mainPool.query("UPDATE tenants SET whatsapp_phone_id = ? WHERE tenant_id = ?", [whatsappPhoneId, tenantId]);
+  
+  return { tenantId, whatsappPhoneId };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TEMPLATE MONITOR (Cross-Tenant) — Read Only
 // ─────────────────────────────────────────────────────────────────────────────
@@ -521,4 +534,4 @@ async function getTemplatesByTenant(tenantId) {
   };
 }
 
-module.exports = { getOverview, getTenant, getUsageStats, getUserList, getSystemHealth, getActivity, provisionNewTenant, addCroQuota, updateTenantTier, getTemplateStats, getTemplatesByTenant };
+module.exports = { getOverview, getTenant, getUsageStats, getUserList, getSystemHealth, getActivity, provisionNewTenant, addCroQuota, updateTenantTier, updateTenantWhatsappId, getTemplateStats, getTemplatesByTenant };
