@@ -10,7 +10,7 @@ const transporter = nodemailer.createTransport({
   port: Number(process.env.SMTP_PORT) || 587,
   secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
   auth: {
-    user: process.env.SMTP_USER, 
+    user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
   },
 });
@@ -69,20 +69,20 @@ async function getOverview() {
   const [[tenantCount]] = await mainPool.query('SELECT COUNT(*) AS cnt FROM tenants');
 
   return {
-    tenants:              parseInt(tenantCount?.cnt)         || 0,
+    tenants: parseInt(tenantCount?.cnt) || 0,
     totalUsers,
     activeUsers,
-    activeCro:            parseInt(croRows[0]?.cnt)          || 0,
-    totalSiswa:           parseInt(siswaRows[0]?.cnt)        || 0,
-    totalSekolah:         parseInt(sekolahRows[0]?.cnt)      || 0,
-    siswaAktifPeriode:    parseInt(siswaAktifRows[0]?.cnt)   || 0,
-    messagesLast24h:      parseInt(chatMsgRows[0]?.cnt)      || 0,
-    activeConversations:  parseInt(convRows[0]?.cnt)         || 0,
-    broadcastsMonth:      parseInt(bcastMonthRows[0]?.cnt)   || 0,
+    activeCro: parseInt(croRows[0]?.cnt) || 0,
+    totalSiswa: parseInt(siswaRows[0]?.cnt) || 0,
+    totalSekolah: parseInt(sekolahRows[0]?.cnt) || 0,
+    siswaAktifPeriode: parseInt(siswaAktifRows[0]?.cnt) || 0,
+    messagesLast24h: parseInt(chatMsgRows[0]?.cnt) || 0,
+    activeConversations: parseInt(convRows[0]?.cnt) || 0,
+    broadcastsMonth: parseInt(bcastMonthRows[0]?.cnt) || 0,
     totalBroadcastSuccess: parseInt(bcastSuccessRows[0]?.cnt) || 0,
-    homeVisitsAktif:      parseInt(hvRows[0]?.cnt)           || 0,
+    homeVisitsAktif: parseInt(hvRows[0]?.cnt) || 0,
     activePeriod,
-    generatedAt:          new Date().toISOString(),
+    generatedAt: new Date().toISOString(),
   };
 }
 
@@ -93,32 +93,32 @@ async function getTenant() {
     FROM tenants 
     ORDER BY created_at ASC
   `);
-  
+
   if (rows.length === 0) return [];
 
   const results = [];
-  
+
   for (const d of rows) {
     let croCnt = 0, siswaCnt = 0, sekolahCnt = 0;
-    
+
     try {
       const [[dbInfo]] = await mainPool.query("SELECT db_host, db_name, db_user, db_password FROM tenant_databases WHERE tenant_id = ?", [d.tenant_id]);
       if (dbInfo) {
-         const tDb = await mysql.createConnection({
-            host: dbInfo.db_host, user: dbInfo.db_user, password: dbInfo.db_password, database: dbInfo.db_name
-         });
-         const [[cro]] = await tDb.query("SELECT COUNT(*) AS cnt FROM users WHERE LOWER(role)='cro' AND LOWER(status)='aktif'");
-         const [[siswa]] = await tDb.query("SELECT COUNT(*) AS cnt FROM master_siswa");
-         const [[sekolah]] = await tDb.query("SELECT COUNT(*) AS cnt FROM master_sekolah");
-         croCnt = parseInt(cro.cnt) || 0;
-         siswaCnt = parseInt(siswa.cnt) || 0;
-         sekolahCnt = parseInt(sekolah.cnt) || 0;
-         await tDb.end();
+        const tDb = await mysql.createConnection({
+          host: dbInfo.db_host, user: dbInfo.db_user, password: dbInfo.db_password, database: dbInfo.db_name
+        });
+        const [[cro]] = await tDb.query("SELECT COUNT(*) AS cnt FROM users WHERE LOWER(role)='cro' AND LOWER(status)='aktif'");
+        const [[siswa]] = await tDb.query("SELECT COUNT(*) AS cnt FROM master_siswa");
+        const [[sekolah]] = await tDb.query("SELECT COUNT(*) AS cnt FROM master_sekolah");
+        croCnt = parseInt(cro.cnt) || 0;
+        siswaCnt = parseInt(siswa.cnt) || 0;
+        sekolahCnt = parseInt(sekolah.cnt) || 0;
+        await tDb.end();
       }
     } catch (e) {
       console.error("Error fetching stats for tenant " + d.tenant_id, e);
     }
-    
+
     let activePeriod = '2025/2026';
     if (d.current_period_start) {
       const yr = new Date(d.current_period_start).getFullYear();
@@ -179,8 +179,8 @@ async function getSystemHealth() {
     const [[{ dbTime }]] = await pool.query('SELECT NOW() AS dbTime');
     return {
       database: { status: 'ok', serverTime: dbTime },
-      uptime:   process.uptime(),
-      memory:   process.memoryUsage(),
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
     };
   } catch (err) {
     return {
@@ -199,13 +199,13 @@ async function getActivity() {
   );
   bcRows.forEach(r => {
     activities.push({
-      type:  'broadcast',
-      icon:  '📢',
+      type: 'broadcast',
+      icon: '📢',
       title: 'Broadcast: ' + (r.template_display_name || '-'),
-      desc:  'Target ' + r.total_target + ' • Terkirim ' + r.total_success + ' • Gagal ' + r.total_failed,
+      desc: 'Target ' + r.total_target + ' • Terkirim ' + r.total_success + ' • Gagal ' + r.total_failed,
       badge: r.status,
-      user:  r.created_by || 'System',
-      ts:    r.created_at
+      user: r.created_by || 'System',
+      ts: r.created_at
     });
   });
 
@@ -215,13 +215,13 @@ async function getActivity() {
   );
   siswaRows.forEach(r => {
     activities.push({
-      type:  'siswa_baru',
-      icon:  '👤',
+      type: 'siswa_baru',
+      icon: '👤',
       title: 'Siswa Baru: ' + r.nama_lengkap,
-      desc:  'Terdaftar via form sosialisasi',
+      desc: 'Terdaftar via form sosialisasi',
       badge: 'Baru',
-      user:  'System',
-      ts:    r.created_date
+      user: 'System',
+      ts: r.created_date
     });
   });
 
@@ -231,13 +231,13 @@ async function getActivity() {
   );
   chatRows.forEach(r => {
     activities.push({
-      type:  'chat',
-      icon:  '💬',
+      type: 'chat',
+      icon: '💬',
       title: 'Chat masuk: ' + (r.from_name || 'Unknown'),
-      desc:  'Pesan WhatsApp masuk',
+      desc: 'Pesan WhatsApp masuk',
       badge: 'Chat',
-      user:  'WhatsApp',
-      ts:    r.datetime
+      user: 'WhatsApp',
+      ts: r.datetime
     });
   });
 
@@ -247,13 +247,13 @@ async function getActivity() {
   );
   hvRows.forEach(r => {
     activities.push({
-      type:  'homevisit',
-      icon:  '🏠',
+      type: 'homevisit',
+      icon: '🏠',
       title: 'Home Visit: ' + (r.id_siswa_nama ? r.id_siswa_nama.split('|').pop().trim() : '-'),
-      desc:  'Hasil: ' + (r.hasil_hv || '-'),
+      desc: 'Hasil: ' + (r.hasil_hv || '-'),
       badge: 'HV',
-      user:  'CRO',
-      ts:    r.tanggal_hv
+      user: 'CRO',
+      ts: r.tanggal_hv
     });
   });
 
@@ -264,25 +264,25 @@ async function getActivity() {
 
 async function provisionNewTenant(payload) {
   const { brand, tier, maxCro, dbHost, dbName, dbUser, dbPass, adminEmail } = payload;
-  
+
   // 1. Generate tenant_id from brand name
   let tenantId = brand.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
   if (!tenantId) tenantId = 'tenant-' + Date.now();
-  
+
   // 2. Determine limits based on Tier
   let limitSiswa = 1000;
   let limitSekolah = 20;
   let maxAdmin = 1, maxManager = 1, maxChiefCro = 1;
-  
-  if (tier === 'Free') { limitSiswa = 300; limitSekolah = 10; maxAdmin=1; maxManager=1; maxChiefCro=1; }
-  else if (tier === 'Pro') { limitSiswa = 1000; limitSekolah = 20; maxAdmin=1; maxManager=1; maxChiefCro=1; }
-  else if (tier === 'Business') { limitSiswa = 2500; limitSekolah = 41; maxAdmin=1; maxManager=1; maxChiefCro=3; }
-  else if (tier === 'Enterprise') { limitSiswa = 8333; limitSekolah = 166; maxAdmin=1; maxManager=3; maxChiefCro=5; }
-  
+
+  if (tier === 'Free') { limitSiswa = 300; limitSekolah = 10; maxAdmin = 1; maxManager = 1; maxChiefCro = 1; }
+  else if (tier === 'Pro') { limitSiswa = 1000; limitSekolah = 20; maxAdmin = 1; maxManager = 1; maxChiefCro = 1; }
+  else if (tier === 'Business') { limitSiswa = 2500; limitSekolah = 41; maxAdmin = 1; maxManager = 1; maxChiefCro = 3; }
+  else if (tier === 'Enterprise') { limitSiswa = 8333; limitSekolah = 166; maxAdmin = 1; maxManager = 3; maxChiefCro = 5; }
+
   // Check if tenant_id already exists
   const [exist] = await mainPool.query("SELECT tenant_id FROM tenants WHERE tenant_id = ?", [tenantId]);
   if (exist.length > 0) {
-    tenantId += '-' + Math.floor(Math.random()*1000);
+    tenantId += '-' + Math.floor(Math.random() * 1000);
   }
 
   // Insert into tenants
@@ -290,13 +290,13 @@ async function provisionNewTenant(payload) {
     INSERT INTO tenants (tenant_id, brand_name, tier, status, limit_siswa, limit_sekolah, max_admin, max_manager, max_chief_cro, max_cro)
     VALUES (?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?)
   `, [tenantId, brand, tier, limitSiswa, limitSekolah, maxAdmin, maxManager, maxChiefCro, maxCro]);
-  
+
   // Insert into tenant_databases
   await mainPool.query(`
     INSERT INTO tenant_databases (tenant_id, db_host, db_name, db_user, db_password)
     VALUES (?, ?, ?, ?, ?)
   `, [tenantId, dbHost, dbName, dbUser, dbPass]);
-  
+
   // 3. Auto-Migration (Copy Schema from default DB)
   console.log(`[Provisioning] Connecting to new tenant DB: ${dbName} at ${dbHost}...`);
   const dbBaru = await mysql.createConnection({
@@ -306,27 +306,27 @@ async function provisionNewTenant(payload) {
   try {
     const [tables] = await pool.query('SHOW TABLES');
     const tableKey = Object.keys(tables[0])[0];
-    
+
     // Disable foreign key checks to prevent errno 150
     await dbBaru.query('SET FOREIGN_KEY_CHECKS = 0');
-    
+
     for (const row of tables) {
       const tableName = row[tableKey];
       console.log(`[Provisioning] Copying schema for table: ${tableName}`);
       const [createRes] = await pool.query(`SHOW CREATE TABLE \`${tableName}\``);
       let createSql = createRes[0]['Create Table'];
-      
+
       await dbBaru.query(`DROP TABLE IF EXISTS \`${tableName}\``);
       await dbBaru.query(createSql);
     }
-    
+
     // Re-enable foreign key checks
     await dbBaru.query('SET FOREIGN_KEY_CHECKS = 1');
-    
+
     // Create Admin user with generated credentials
     adminUsername = 'admin_' + brand.toLowerCase().replace(/[^a-z0-9]/g, '');
     adminPassword = 'Nexa' + Math.floor(1000 + Math.random() * 9000) + '!';
-    
+
     // Generate salt and hash (SHA256) compatible with Nexa Auth (varchar 20 limit)
     const salt = crypto.randomBytes(10).toString('hex');
     const hash = crypto.createHash('sha256').update(String(adminPassword) + String(salt)).digest('hex');
@@ -365,54 +365,55 @@ async function provisionNewTenant(payload) {
   } catch (err) {
     console.error(`[Provisioning] Gagal mengirim email kredensial ke ${adminEmail}:`, err.message);
   }
-  
+
   return { tenantId, brand, adminUsername, adminPassword };
 }
 
 async function addCroQuota(payload) {
   const { tenantId, tambahanCro } = payload;
   const num = parseInt(tambahanCro);
-  
+
   if (!num || num <= 0) throw new Error("Jumlah tambahan tidak valid");
-  
+
   // Ambil data sekarang
   const [rows] = await mainPool.query("SELECT max_cro FROM tenants WHERE tenant_id = ?", [tenantId]);
   if (rows.length === 0) throw new Error("Tenant tidak ditemukan");
-  
+
   const currentMax = rows[0].max_cro || 0;
   const newMax = currentMax + num;
-  
+
   await mainPool.query("UPDATE tenants SET max_cro = ? WHERE tenant_id = ?", [newMax, tenantId]);
   return { tenantId, previousMax: currentMax, newMax };
 }
 
 async function updateTenantTier(payload) {
   const { tenantId, tier } = payload;
-  
+
   if (!tenantId || !tier) throw new Error("Input tidak valid");
-  
+
   // Verifikasi eksistensi tenant
   const [rows] = await mainPool.query("SELECT tier FROM tenants WHERE tenant_id = ?", [tenantId]);
   if (rows.length === 0) throw new Error("Tenant tidak ditemukan");
-  
+
   const currentTier = rows[0].tier;
-  
+
   // Tentukan limit berdasarkan tier baru (mengacu panduna-tier-feature.md bulanan)
-  let limitSiswa = 1000;
-  let limitSekolah = 20;
-  let maxAdmin = 1, maxManager = 1, maxChiefCro = 1, maxCro = 1;
+  let limitSiswa, limitSekolah, maxAdmin, maxManager, maxChiefCro, maxCro;
   
   if (tier === 'Free') { limitSiswa = 300; limitSekolah = 10; maxAdmin=1; maxManager=1; maxChiefCro=1; maxCro=1; }
   else if (tier === 'Pro') { limitSiswa = 1000; limitSekolah = 20; maxAdmin=1; maxManager=1; maxChiefCro=1; maxCro=2; }
   else if (tier === 'Business') { limitSiswa = 2500; limitSekolah = 41; maxAdmin=1; maxManager=1; maxChiefCro=3; maxCro=10; }
   else if (tier === 'Enterprise') { limitSiswa = 8333; limitSekolah = 166; maxAdmin=1; maxManager=3; maxChiefCro=5; maxCro=30; }
+  else throw new Error("Tier tidak valid. Harus Free, Pro, Business, atau Enterprise.");
   
+  const formattedTier = tier.toUpperCase();
+
   await mainPool.query(`
     UPDATE tenants 
     SET tier = ?, limit_siswa = ?, limit_sekolah = ?, max_admin = ?, max_manager = ?, max_chief_cro = ?, max_cro = ? 
     WHERE tenant_id = ?
-  `, [tier, limitSiswa, limitSekolah, maxAdmin, maxManager, maxChiefCro, maxCro, tenantId]);
-  
+  `, [formattedTier, limitSiswa, limitSekolah, maxAdmin, maxManager, maxChiefCro, maxCro, tenantId]);
+
   return { tenantId, previousTier: currentTier, newTier: tier };
 }
 
