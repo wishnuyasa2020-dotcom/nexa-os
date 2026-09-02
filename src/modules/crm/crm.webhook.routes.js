@@ -14,14 +14,14 @@
  */
 
 const { Router } = require('express');
-const { pool }   = require('../../config/database');
+const { pool, tenantStorage } = require('../../config/database');
 
 const router = Router();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /api/webhook/whatsapp — Verifikasi Webhook dari Meta
+// GET /api/webhook/:tenantId — Verifikasi Webhook dari Meta
 // ─────────────────────────────────────────────────────────────────────────────
-router.get('/whatsapp', (req, res) => {
+router.get('/:tenantId', (req, res) => {
   const verify_token = process.env.WA_VERIFY_TOKEN || 'derma_webhook_2026';
   const mode      = req.query['hub.mode'];
   const token     = req.query['hub.verify_token'];
@@ -29,7 +29,7 @@ router.get('/whatsapp', (req, res) => {
 
   if (mode && token) {
     if (mode === 'subscribe' && token === verify_token) {
-      console.log('[Webhook] VERIFIED');
+      console.log(`[Webhook] VERIFIED for tenant: ${req.params.tenantId}`);
       res.status(200).send(challenge);
     } else {
       res.sendStatus(403);
@@ -40,41 +40,46 @@ router.get('/whatsapp', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /api/webhook/whatsapp — Menerima event pesan masuk & status update
+// POST /api/webhook/:tenantId — Menerima event pesan masuk & status update
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/whatsapp', async (req, res) => {
+router.post('/:tenantId', (req, res) => {
   // Meta menunggu 200 dalam 20 detik. Balas lebih dulu, proses di background.
   res.sendStatus(200);
 
+  const { tenantId } = req.params;
   const body = req.body;
   if (!body.object) return;
 
-  const entries = body.entry || [];
-  for (const entry of entries) {
-    const changes = entry.changes || [];
-    for (const change of changes) {
-      const val = change.value || {};
+  // Jalankan dalam context tenantStorage agar pool.getConnection() otomatis
+  // mengarah ke database milik tenantId tersebut.
+  tenantStorage.run(tenantId, async () => {
+    const entries = body.entry || [];
+    for (const entry of entries) {
+      const changes = entry.changes || [];
+      for (const change of changes) {
+        const val = change.value || {};
 
-      // ── Status Delivery Update (sent/delivered/read) ──────────────────────
-      if (val.statuses && val.statuses.length > 0) {
-        for (const statusEvt of val.statuses) {
-          await handleStatusUpdate(statusEvt).catch(e =>
-            console.error('[Webhook] handleStatusUpdate error:', e.message)
-          );
+        // ── Status Delivery Update (sent/delivered/read) ──────────────────────
+        if (val.statuses && val.statuses.length > 0) {
+          for (const statusEvt of val.statuses) {
+            await handleStatusUpdate(statusEvt).catch(e =>
+              console.error(`[Webhook ${tenantId}] handleStatusUpdate error:`, e.message)
+            );
+          }
         }
-      }
 
-      // ── Pesan Masuk ───────────────────────────────────────────────────────
-      if (val.messages && val.messages.length > 0) {
-        const contactMeta = (val.contacts || [])[0] || null;
-        for (const msg of val.messages) {
-          await handleIncomingMessage(msg, contactMeta).catch(e =>
-            console.error('[Webhook] handleIncomingMessage error:', e.message)
-          );
+        // ── Pesan Masuk ───────────────────────────────────────────────────────
+        if (val.messages && val.messages.length > 0) {
+          const contactMeta = (val.contacts || [])[0] || null;
+          for (const msg of val.messages) {
+            await handleIncomingMessage(msg, contactMeta).catch(e =>
+              console.error(`[Webhook ${tenantId}] handleIncomingMessage error:`, e.message)
+            );
+          }
         }
       }
     }
-  }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
