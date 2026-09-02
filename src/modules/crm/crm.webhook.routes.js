@@ -14,12 +14,86 @@
  */
 
 const { Router } = require('express');
-const { pool, tenantStorage } = require('../../config/database');
+const { mainPool, pool, tenantStorage } = require('../../config/database');
 
 const router = Router();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /api/webhook/:tenantId — Verifikasi Webhook dari Meta
+// GET /api/webhook/global — Verifikasi Webhook Global (Multi-tenant via 1 Meta App)
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/global', (req, res) => {
+  const verify_token = process.env.WA_VERIFY_TOKEN || 'derma_webhook_2026';
+  const mode      = req.query['hub.mode'];
+  const token     = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode && token) {
+    if (mode === 'subscribe' && token === verify_token) {
+      console.log(`[Webhook] VERIFIED for GLOBAL endpoint`);
+      res.status(200).send(challenge);
+    } else {
+      res.sendStatus(403);
+    }
+  } else {
+    res.sendStatus(400);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/webhook/global — Menerima event pesan masuk (Global)
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/global', (req, res) => {
+  // Balas 200 ke Meta segera
+  res.sendStatus(200);
+
+  const body = req.body;
+  if (!body.object) return;
+
+  const entries = body.entry || [];
+  for (const entry of entries) {
+    const changes = entry.changes || [];
+    for (const change of changes) {
+      const val = change.value || {};
+      const phoneNumberId = val.metadata?.phone_number_id;
+
+      if (!phoneNumberId) continue;
+
+      // Lacak tenant_id dari Main DB
+      mainPool.query('SELECT tenant_id FROM tenants WHERE whatsapp_phone_id = ?', [phoneNumberId])
+        .then(([rows]) => {
+          if (rows.length === 0) {
+            console.log(`[Webhook Global] Unknown phone_number_id: ${phoneNumberId}`);
+            return;
+          }
+          const tenantId = rows[0].tenant_id;
+
+          tenantStorage.run(tenantId, async () => {
+            if (val.statuses && val.statuses.length > 0) {
+              for (const statusEvt of val.statuses) {
+                await handleStatusUpdate(statusEvt).catch(e =>
+                  console.error(`[Webhook ${tenantId}] handleStatusUpdate error:`, e.message)
+                );
+              }
+            }
+            if (val.messages && val.messages.length > 0) {
+              const contactMeta = (val.contacts || [])[0] || null;
+              for (const msg of val.messages) {
+                await handleIncomingMessage(msg, contactMeta).catch(e =>
+                  console.error(`[Webhook ${tenantId}] handleIncomingMessage error:`, e.message)
+                );
+              }
+            }
+          });
+        })
+        .catch(err => {
+          console.error('[Webhook Global] DB lookup error:', err.message);
+        });
+    }
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/webhook/:tenantId — Verifikasi Webhook dari Meta (Spesifik Tenant)
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/:tenantId', (req, res) => {
   const verify_token = process.env.WA_VERIFY_TOKEN || 'derma_webhook_2026';
