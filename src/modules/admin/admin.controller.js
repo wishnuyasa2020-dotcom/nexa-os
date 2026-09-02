@@ -130,4 +130,21 @@ async function addonCro(req, res) {
   }
 }
 
-module.exports = { requireAdminKey, ping, overview, tenant, addTenant, addonCro, usage, users, health, activity };
+/**
+ * PUT /api/admin/tenant/tier
+ */
+async function updateTier(req, res) {
+  try {
+    const { tenantId, tier } = req.body;
+    if (!tenantId || !tier) {
+      return res.status(400).json({ status: 'error', message: 'Input tidak valid' });
+    }
+    const data = await adminService.updateTenantTier(req.body);
+    res.json({ status: 'ok', data, message: 'Paket berhasil diubah' });
+  } catch (err) {
+    console.error('updateTier Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+module.exports = { requireAdminKey, ping, overview, tenant, addTenant, addonCro, updateTier, usage, users, health, activity };

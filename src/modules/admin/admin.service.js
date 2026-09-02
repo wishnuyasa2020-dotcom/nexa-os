@@ -386,4 +386,19 @@ async function addCroQuota(payload) {
   return { tenantId, previousMax: currentMax, newMax };
 }
 
-module.exports = { getOverview, getTenant, getUsageStats, getUserList, getSystemHealth, getActivity, provisionNewTenant, addCroQuota };
+async function updateTenantTier(payload) {
+  const { tenantId, tier } = payload;
+  
+  if (!tenantId || !tier) throw new Error("Input tidak valid");
+  
+  // Verifikasi eksistensi tenant
+  const [rows] = await mainPool.query("SELECT tier FROM tenants WHERE tenant_id = ?", [tenantId]);
+  if (rows.length === 0) throw new Error("Tenant tidak ditemukan");
+  
+  const currentTier = rows[0].tier;
+  
+  await mainPool.query("UPDATE tenants SET tier = ? WHERE tenant_id = ?", [tier, tenantId]);
+  return { tenantId, previousTier: currentTier, newTier: tier };
+}
+
+module.exports = { getOverview, getTenant, getUsageStats, getUserList, getSystemHealth, getActivity, provisionNewTenant, addCroQuota, updateTenantTier };
