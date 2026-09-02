@@ -258,15 +258,21 @@ router.patch('/chats/:convId/read',                   chatCtrl.markAsRead);
 // ─────────────────────────────────────────────────────────────────────────────
 // TEMPLATE MANAGER — V1 RESTful
 // ─────────────────────────────────────────────────────────────────────────────
-// GET  /api/v1/templates                           — List semua template
-// POST /api/v1/templates                           — Buat template baru
-// PUT  /api/v1/templates/:id                       — Update template
-// POST /api/v1/templates/sync                      — Sync status dari Meta
+// GET    /api/v1/templates                        — List semua template
+// GET    /api/v1/templates/:id                    — Detail satu template
+// POST   /api/v1/templates                        — Buat template baru
+// PUT    /api/v1/templates/:id                    — Update info dasar
+// PATCH  /api/v1/templates/:id/parameters         — Update JSON parameters schema
+// DELETE /api/v1/templates/:id                    — Soft delete
+// POST   /api/v1/templates/sync                   — Sync dari Meta
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/templates',                              templateCtrl.getTemplates);
 router.post('/templates/sync',                        templateCtrl.syncMetaStatus);
 router.post('/templates',                             templateCtrl.createTemplate);
+router.get('/templates/:id',                          templateCtrl.getTemplate);
 router.put('/templates/:id',                          templateCtrl.updateTemplate);
+router.patch('/templates/:id/parameters',             templateCtrl.updateParameters);
+router.delete('/templates/:id',                       templateCtrl.deleteTemplate);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SETTINGS (CLASS, KOTA & KECAMATAN MAPPING)

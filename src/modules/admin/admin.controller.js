@@ -147,4 +147,31 @@ async function updateTier(req, res) {
   }
 }
 
-module.exports = { requireAdminKey, ping, overview, tenant, addTenant, addonCro, updateTier, usage, users, health, activity };
+/**
+ * GET /api/admin/templates/stats
+ * Statistik template cross-tenant (read-only, nexamos-admin)
+ */
+async function templateStats(req, res) {
+  try {
+    const data = await adminService.getTemplateStats();
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * GET /api/admin/templates/:tenantId
+ * Template list satu tenant (read-only)
+ */
+async function templatesByTenant(req, res) {
+  try {
+    const data = await adminService.getTemplatesByTenant(req.params.tenantId);
+    res.json({ status: 'ok', ...data });
+  } catch (err) {
+    const is404 = err.message.includes('tidak ditemukan');
+    res.status(is404 ? 404 : 500).json({ status: 'error', message: err.message });
+  }
+}
+
+module.exports = { requireAdminKey, ping, overview, tenant, addTenant, addonCro, updateTier, usage, users, health, activity, templateStats, templatesByTenant };

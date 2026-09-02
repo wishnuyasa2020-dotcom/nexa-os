@@ -417,4 +417,108 @@ async function updateTenantTier(payload) {
   return { tenantId, previousTier: currentTier, newTier: tier };
 }
 
-module.exports = { getOverview, getTenant, getUsageStats, getUserList, getSystemHealth, getActivity, provisionNewTenant, addCroQuota, updateTenantTier };
+// ─────────────────────────────────────────────────────────────────────────────
+// TEMPLATE MONITOR (Cross-Tenant) — Read Only
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/admin/templates/stats
+ * Aggregate statistik template seluruh tenant
+ * Response: { total, approved, pending, rejected, local_only, tenants:[{tenantId, brandName, templates:[]}] }
+ */
+async function getTemplateStats() {
+  // Ambil semua tenant aktif
+  const [tenants] = await mainPool.query(
+    `SELECT t.tenant_id, t.brand_name, td.db_host, td.db_port, td.db_name, td.db_user, td.db_password
+     FROM tenants t
+     JOIN tenant_databases td ON t.tenant_id = td.tenant_id
+     WHERE t.status = 'ACTIVE'
+     ORDER BY t.brand_name ASC`
+  );
+
+  let totalAll = 0, approved = 0, pending = 0, rejected = 0, local_only = 0;
+  const tenantResults = [];
+
+  await Promise.all(
+    tenants.map(async (t) => {
+      try {
+        const conn = await mysql.createConnection({
+          host: t.db_host, port: t.db_port || 3306,
+          user: t.db_user, password: t.db_password, database: t.db_name,
+          connectTimeout: 5000,
+        });
+        const [rows] = await conn.query(
+          `SELECT id_template, nama_template, template_name_api, meta_status, status_meta,
+                  status_crm, kategori, pipeline, language_code, last_updated
+           FROM wa_templates
+           WHERE status_crm != 'DELETED'
+           ORDER BY urutan ASC, created_date DESC`
+        );
+        await conn.end();
+
+        // Normalise meta_status
+        const templates = rows.map(r => ({
+          ...r,
+          meta_status: r.meta_status || r.status_meta || 'LOCAL_ONLY',
+        }));
+
+        // Aggregate
+        templates.forEach(r => {
+          totalAll++;
+          const s = (r.meta_status || '').toUpperCase();
+          if (s === 'APPROVED')   approved++;
+          else if (s === 'PENDING')  pending++;
+          else if (s === 'REJECTED') rejected++;
+          else                        local_only++;
+        });
+
+        tenantResults.push({
+          tenantId:  t.tenant_id,
+          brandName: t.brand_name,
+          templates,
+        });
+      } catch (err) {
+        console.warn(`[Admin:templates] Skip tenant ${t.tenant_id}: ${err.message}`);
+        tenantResults.push({ tenantId: t.tenant_id, brandName: t.brand_name, templates: [], error: err.message });
+      }
+    })
+  );
+
+  return { total: totalAll, approved, pending, rejected, local_only, tenants: tenantResults };
+}
+
+/**
+ * GET /api/admin/templates/:tenantId
+ * List template milik satu tenant spesifik
+ */
+async function getTemplatesByTenant(tenantId) {
+  const [rows] = await mainPool.query(
+    `SELECT t.tenant_id, t.brand_name, td.db_host, td.db_port, td.db_name, td.db_user, td.db_password
+     FROM tenants t
+     JOIN tenant_databases td ON t.tenant_id = td.tenant_id
+     WHERE t.tenant_id = ? AND t.status = 'ACTIVE' LIMIT 1`,
+    [tenantId]
+  );
+  if (rows.length === 0) throw new Error(`Tenant '${tenantId}' tidak ditemukan.`);
+
+  const t = rows[0];
+  const conn = await mysql.createConnection({
+    host: t.db_host, port: t.db_port || 3306,
+    user: t.db_user, password: t.db_password, database: t.db_name,
+    connectTimeout: 5000,
+  });
+
+  const [templates] = await conn.query(
+    `SELECT * FROM wa_templates WHERE status_crm != 'DELETED'
+     ORDER BY urutan ASC, created_date DESC`
+  );
+  await conn.end();
+
+  return {
+    tenantId: t.tenant_id,
+    brandName: t.brand_name,
+    data: templates.map(r => ({ ...r, meta_status: r.meta_status || r.status_meta || 'LOCAL_ONLY' })),
+  };
+}
+
+module.exports = { getOverview, getTenant, getUsageStats, getUserList, getSystemHealth, getActivity, provisionNewTenant, addCroQuota, updateTenantTier, getTemplateStats, getTemplatesByTenant };

@@ -19,4 +19,9 @@ router.get('/users', ctrl.users);
 router.get('/health', ctrl.health);
 router.get('/activity', ctrl.activity);
 
+// Template Monitor — read-only cross-tenant (nexamos-admin)
+// PENTING: /templates/stats harus SEBELUM /templates/:tenantId
+router.get('/templates/stats',        ctrl.templateStats);
+router.get('/templates/:tenantId',    ctrl.templatesByTenant);
+
 module.exports = router;
