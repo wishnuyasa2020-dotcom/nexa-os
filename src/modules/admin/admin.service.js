@@ -397,7 +397,22 @@ async function updateTenantTier(payload) {
   
   const currentTier = rows[0].tier;
   
-  await mainPool.query("UPDATE tenants SET tier = ? WHERE tenant_id = ?", [tier, tenantId]);
+  // Tentukan limit berdasarkan tier baru (mengacu panduna-tier-feature.md bulanan)
+  let limitSiswa = 1000;
+  let limitSekolah = 20;
+  let maxAdmin = 1, maxManager = 1, maxChiefCro = 1, maxCro = 1;
+  
+  if (tier === 'Free') { limitSiswa = 300; limitSekolah = 10; maxAdmin=1; maxManager=1; maxChiefCro=1; maxCro=1; }
+  else if (tier === 'Pro') { limitSiswa = 1000; limitSekolah = 20; maxAdmin=1; maxManager=1; maxChiefCro=1; maxCro=2; }
+  else if (tier === 'Business') { limitSiswa = 2500; limitSekolah = 41; maxAdmin=1; maxManager=1; maxChiefCro=3; maxCro=10; }
+  else if (tier === 'Enterprise') { limitSiswa = 8333; limitSekolah = 166; maxAdmin=1; maxManager=3; maxChiefCro=5; maxCro=30; }
+  
+  await mainPool.query(`
+    UPDATE tenants 
+    SET tier = ?, limit_siswa = ?, limit_sekolah = ?, max_admin = ?, max_manager = ?, max_chief_cro = ?, max_cro = ? 
+    WHERE tenant_id = ?
+  `, [tier, limitSiswa, limitSekolah, maxAdmin, maxManager, maxChiefCro, maxCro, tenantId]);
+  
   return { tenantId, previousTier: currentTier, newTier: tier };
 }
 
