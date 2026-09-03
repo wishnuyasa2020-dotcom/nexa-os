@@ -121,15 +121,18 @@ async function getConversationList(user, query = {}) {
 }
 
 async function initiateConversation(id_siswa, user) {
+  console.log(`[Chat] initiateConversation dipanggil untuk id_siswa: ${id_siswa}`);
   // Check if conversation already exists
   const [existing] = await pool.query(
     'SELECT conv_id FROM conversations WHERE id_siswa = ? LIMIT 1',
     [id_siswa]
   );
   if (existing.length > 0) {
+    console.log(`[Chat] Percakapan sudah ada: ${existing[0].conv_id}`);
     return { conv_id: existing[0].conv_id };
   }
 
+  console.log(`[Chat] Percakapan belum ada, mengambil detail siswa...`);
   // If not, fetch student details
   const [studentRows] = await pool.query(
     'SELECT wa, bsuid, nama_lengkap FROM master_siswa WHERE id_siswa = ?',
@@ -137,19 +140,23 @@ async function initiateConversation(id_siswa, user) {
   );
 
   if (studentRows.length === 0) {
+    console.log(`[Chat] Siswa tidak ditemukan!`);
     throw new Error('Siswa tidak ditemukan di master_siswa');
   }
 
   const student = studentRows[0];
   const waNumber = student.wa || student.bsuid;
+  console.log(`[Chat] Siswa ditemukan: ${student.nama_lengkap}, WA/BSUID: ${waNumber}`);
 
   if (!waNumber) {
     throw new Error('Siswa tidak memiliki nomor WA atau BSUID yang bisa dihubungi');
   }
 
   // Create new conversation with generated UUID
-  const crypto = require('crypto');
-  const conv_id = crypto.randomUUID();
+  console.log(`[Chat] Membuat ID percakapan baru...`);
+  const { v4: uuidv4 } = require('uuid');
+  const conv_id = uuidv4();
+  console.log(`[Chat] ID baru: ${conv_id}. Menyimpan ke DB...`);
 
   await pool.query(
     `INSERT INTO conversations (conv_id, id_siswa, wa_number, student_name, created_by, status, window_status, created_at, last_msg_ts)
@@ -157,6 +164,7 @@ async function initiateConversation(id_siswa, user) {
     [conv_id, id_siswa, waNumber, student.nama_lengkap, user.nama]
   );
 
+  console.log(`[Chat] Percakapan berhasil dibuat dengan ID: ${conv_id}`);
   return { conv_id };
 }
 
