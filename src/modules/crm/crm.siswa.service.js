@@ -134,7 +134,9 @@ async function listSiswa(user, query = {}) {
       IFNULL(sp.status_terkini, '') as status,
       IFNULL(sp.next_action, '') as nextAction,
       IFNULL(sp.prioritas, '') as prioritas,
-      IFNULL(DATE_FORMAT(sp.due_date, '%Y-%m-%d'), '') as dueDate
+      IFNULL(DATE_FORMAT(sp.due_date, '%Y-%m-%d'), '') as dueDate,
+      ms.wa,
+      ms.bsuid
     FROM siswa_periode sp
     LEFT JOIN master_siswa ms ON sp.id_siswa = ms.id_siswa
     LEFT JOIN master_kelas mk ON ms.kelas_id = mk.id
@@ -193,8 +195,8 @@ async function tambahSiswa(data, user) {
   if (!mp || mp === '-') mp = await getActivePeriod();
 
   // Validate required
-  if (!data.nama_lengkap || !data.no_wa || !data.id_sekolah || !data.minat_awal || !data.rencana_lulus) {
-    throw new Error('Data tidak lengkap (nama, no_wa, sekolah, minat, rencana lulus wajib).');
+  if (!data.nama_lengkap || (!data.no_wa && !data.bsuid) || !data.id_sekolah || !data.minat_awal || !data.rencana_lulus) {
+    throw new Error('Data tidak lengkap (nama, kontak (wa/bsuid), sekolah, minat, rencana lulus wajib).');
   }
 
   // ── Validasi Kuota Ingestion ──
@@ -242,18 +244,26 @@ async function tambahSiswa(data, user) {
       }
     }
     
-    // Check duplikat nomor WA
-    const [existing] = await conn.query("SELECT id_siswa FROM master_siswa WHERE wa = ?", [waClean]);
-    if (existing.length > 0) {
-      throw new Error(`Nomor WA ${waClean} sudah terdaftar di sistem.`);
+    // Check duplikat nomor WA atau BSUID
+    if (waClean) {
+      const [existing] = await conn.query("SELECT id_siswa FROM master_siswa WHERE wa = ?", [waClean]);
+      if (existing.length > 0) {
+        throw new Error(`Nomor WA ${waClean} sudah terdaftar di sistem.`);
+      }
+    }
+    if (data.bsuid) {
+      const [existing] = await conn.query("SELECT id_siswa FROM master_siswa WHERE bsuid = ?", [data.bsuid]);
+      if (existing.length > 0) {
+        throw new Error(`BSUID ${data.bsuid} sudah terdaftar di sistem.`);
+      }
     }
 
     // Insert master_siswa
     await conn.query(`
       INSERT INTO master_siswa 
-      (id_siswa, id_sekolah, nama_lengkap, wa, kelas_id, minat_awal, rencana_lulus)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [idSiswa, data.id_sekolah, data.nama_lengkap, waClean, kelasId || null, data.minat_awal, data.rencana_lulus]);
+      (id_siswa, id_sekolah, nama_lengkap, wa, bsuid, kelas_id, minat_awal, rencana_lulus)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [idSiswa, data.id_sekolah, data.nama_lengkap, waClean || null, data.bsuid || null, kelasId || null, data.minat_awal, data.rencana_lulus]);
 
     // Insert siswa_periode (default Data Masuk)
     await conn.query(`
@@ -306,11 +316,12 @@ async function editSiswa(id, data, user) {
 
     await conn.query(`
       UPDATE master_siswa SET 
-        nama_lengkap = ?, wa = ?, kelas_id = ?, minat_awal = ?, rencana_lulus = ?
+        nama_lengkap = ?, wa = ?, bsuid = ?, kelas_id = ?, minat_awal = ?, rencana_lulus = ?
       WHERE id_siswa = ?
     `, [
       data.nama_lengkap || rows[0].nama_lengkap,
-      waClean,
+      waClean || null,
+      data.bsuid || rows[0].bsuid || null,
       kelasId,
       data.minat_awal || rows[0].minat_awal,
       data.rencana_lulus || rows[0].rencana_lulus,
@@ -431,13 +442,21 @@ async function importBatch(dataBatch, croName, user) {
     await conn.beginTransaction();
 
     for (const row of dataBatch) {
-      if (!row.nama_lengkap || !row.no_wa || !row.id_sekolah) {
+      if (!row.nama_lengkap || (!row.no_wa && !row.bsuid) || !row.id_sekolah) {
         skipCount++; continue;
       }
       const waClean = cleanPhone(row.no_wa);
-      const [existing] = await conn.query("SELECT id_siswa FROM master_siswa WHERE wa = ?", [waClean]);
-      if (existing.length > 0) {
-        skipCount++; continue;
+      if (waClean) {
+        const [existing] = await conn.query("SELECT id_siswa FROM master_siswa WHERE wa = ?", [waClean]);
+        if (existing.length > 0) {
+          skipCount++; continue;
+        }
+      }
+      if (row.bsuid) {
+        const [existing] = await conn.query("SELECT id_siswa FROM master_siswa WHERE bsuid = ?", [row.bsuid]);
+        if (existing.length > 0) {
+          skipCount++; continue;
+        }
       }
 
       // ── Resolve kelas_id ──
@@ -474,9 +493,9 @@ async function importBatch(dataBatch, croName, user) {
       const prioritas = hitungPrioritas(row.minat_awal || 'Ragu', row.rencana_lulus || 'Belum Tahu');
 
       await conn.query(`
-        INSERT INTO master_siswa (id_siswa, id_sekolah, nama_lengkap, wa, kelas_id, minat_awal, rencana_lulus)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, [idSiswa, row.id_sekolah, row.nama_lengkap, waClean, kelasId || null, row.minat_awal || 'Ragu', row.rencana_lulus || 'Belum Tahu']);
+        INSERT INTO master_siswa (id_siswa, id_sekolah, nama_lengkap, wa, bsuid, kelas_id, minat_awal, rencana_lulus)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [idSiswa, row.id_sekolah, row.nama_lengkap, waClean || null, row.bsuid || null, kelasId || null, row.minat_awal || 'Ragu', row.rencana_lulus || 'Belum Tahu']);
 
       await conn.query(`
         INSERT INTO siswa_periode (id_siswa, nama_siswa, marketing_period, status_terkini, next_action, due_date, cro, prioritas)
