@@ -160,7 +160,7 @@ async function detailSiswa(id, user, query = {}) {
     SELECT
       ms.id_siswa, ms.id_sekolah, sek.nama_sekolah as nama_sekolah, ms.nama_lengkap, 
       ms.wa, ms.bsuid, mk.nama_kelas as kelas, ms.minat_awal, ms.rencana_lulus, sp.prioritas,
-      sp.status_terkini, sp.next_action, DATE_FORMAT(sp.due_date, '%Y-%m-%d') as due_date, sp.cro as pj_cro, sp.orangtua_tahu, sp.alasan_tidak_lanjut
+      sp.status_terkini, sp.next_action, DATE_FORMAT(sp.due_date, '%Y-%m-%d') as due_date, sp.cro as pj_cro, ms.orangtua_tahu, sp.alasan_tidak_lanjut
     FROM master_siswa ms
     LEFT JOIN master_kelas mk ON ms.kelas_id = mk.id
     LEFT JOIN siswa_periode sp ON ms.id_siswa = sp.id_siswa AND sp.marketing_period = ?
