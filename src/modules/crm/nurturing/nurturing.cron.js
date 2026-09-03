@@ -16,6 +16,7 @@
 
 const cron    = require('node-cron');
 const svc     = require('./nurturing.service');
+const { mainPool, tenantStorage } = require('../../../config/database');
 
 /**
  * Jalankan kedua job (nurturing + snooze) dalam satu schedule.
@@ -30,20 +31,45 @@ function initNurturingCron() {
     console.log(`\n[Nurturing Cron] ⏰ Terpicu pada ${ts} (21:00 WIB)`);
 
     try {
-      const nurturingResult = await svc.runNurturingCron();
-      console.log('[Nurturing Cron] Nurturing Probing:', nurturingResult);
+      // Ambil semua tenant yang aktif dan memiliki token WA
+      const [tenants] = await mainPool.query(
+        'SELECT tenant_id, whatsapp_phone_id, whatsapp_access_token FROM tenants'
+      );
+
+      console.log(`[Nurturing Cron] Memproses ${tenants.length} tenants...`);
+
+      for (const tenant of tenants) {
+        if (!tenant.tenant_id) continue;
+        const tenantId = tenant.tenant_id;
+        
+        console.log(`\n[Nurturing Cron] --- Tenant: ${tenantId} ---`);
+        const credentials = {
+          phoneId: tenant.whatsapp_phone_id,
+          token: tenant.whatsapp_access_token
+        };
+
+        // Jalankan service di dalam context tenantStorage
+        await tenantStorage.run(tenantId, async () => {
+          try {
+            const nurturingResult = await svc.runNurturingCron(credentials);
+            console.log(`[Nurturing Cron][${tenantId}] Nurturing Probing:`, nurturingResult);
+          } catch (err) {
+            console.error(`[Nurturing Cron][${tenantId}] ❌ Error pada nurturing job:`, err.message);
+          }
+
+          try {
+            const snoozeResult = await svc.runSnoozeCron(credentials);
+            console.log(`[Nurturing Cron][${tenantId}] Snooze Campaign:`, snoozeResult);
+          } catch (err) {
+            console.error(`[Nurturing Cron][${tenantId}] ❌ Error pada snooze job:`, err.message);
+          }
+        });
+      }
     } catch (err) {
-      console.error('[Nurturing Cron] ❌ Error pada nurturing job:', err.message);
+      console.error('[Nurturing Cron] ❌ Error mengambil daftar tenant:', err.message);
     }
 
-    try {
-      const snoozeResult = await svc.runSnoozeCron();
-      console.log('[Nurturing Cron] Snooze Campaign:', snoozeResult);
-    } catch (err) {
-      console.error('[Nurturing Cron] ❌ Error pada snooze job:', err.message);
-    }
-
-    console.log('[Nurturing Cron] ✅ Job selesai.\n');
+    console.log('[Nurturing Cron] ✅ Semua job selesai.\n');
   }, {
     scheduled: true,
     timezone:  'Asia/Jakarta', // Langsung gunakan timezone WIB — tidak perlu konversi manual

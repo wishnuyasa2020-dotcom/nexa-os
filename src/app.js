@@ -9,12 +9,15 @@ const crmRoutes         = require('./modules/crm/crm.routes');
 const publicRoutes      = require('./modules/crm/crm.public.routes');
 const webhookRoutes     = require('./modules/crm/crm.webhook.routes');    // legacy single-tenant
 const tenantWebhook     = require('./modules/crm/webhook.router');         // NEW: BYOW per-tenant
-const { initNurturingCron } = require('./modules/crm/nurturing/nurturing.cron');
+const { initNurturingCron }    = require('./modules/crm/nurturing/nurturing.cron');
+const { initBroadcastWorker }  = require('./modules/crm/broadcast/broadcast.worker');
 
 const app = express();
 
 // ── Init Background Jobs (Cron) ─────────────────────────────────────────────
-initNurturingCron();
+initNurturingCron();   // Nurturing & Snooze — setiap hari 21:00 WIB
+initBroadcastWorker(); // Broadcast Queue Worker — setiap 1 menit
+
 
 
 // ── Middleware ──────────────────────────────────────────────────

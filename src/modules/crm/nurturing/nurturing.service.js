@@ -7,6 +7,7 @@
  */
 
 const { pool } = require('../../../config/database');
+const axios = require('axios');
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
@@ -345,7 +346,7 @@ async function stopSnooze(idSiswa, user) {
  * Logika: Kirim template probe_1 s/d probe_5 ke Calon Prospek yang is_in_campaign = true.
  * (Pengiriman WA ke Meta API akan diimplementasikan saat WA_ACCESS_TOKEN tersedia)
  */
-async function runNurturingCron() {
+async function runNurturingCron(credentials = null) {
   console.log('[Nurturing Cron] ▶ Memulai nurturing probing job...');
   const mp = await getActivePeriod();
 
@@ -375,14 +376,14 @@ async function runNurturingCron() {
 
     // Probe 1: belum pernah dikirim
     if (level === 0) {
-      await _sendProbe(lead, 1, mp);
+      await _sendProbe(lead, 1, mp, credentials);
       sent++;
       continue;
     }
 
     // Probe 2-5: kirim jika sudah >= 7 hari sejak probe terakhir
     if (level >= 1 && level <= 4 && daysSinceLast !== null && daysSinceLast >= 7) {
-      await _sendProbe(lead, level + 1, mp);
+      await _sendProbe(lead, level + 1, mp, credentials);
       sent++;
       continue;
     }
@@ -418,7 +419,7 @@ async function runNurturingCron() {
  * Background Job: Snooze Campaign
  * Bangunkan leads yang snooze_until <= NOW().
  */
-async function runSnoozeCron() {
+async function runSnoozeCron(credentials = null) {
   console.log('[Snooze Cron] ▶ Memulai snooze campaign job...');
   const mp = await getActivePeriod();
 
@@ -442,7 +443,7 @@ async function runSnoozeCron() {
 
     if (nextLevel <= 3) {
       // Kirim template snooze_{nextLevel}
-      await _sendSnoozeTemplate(lead, nextLevel, mp);
+      await _sendSnoozeTemplate(lead, nextLevel, mp, credentials);
       woken++;
     } else {
       // Snooze level 3 sudah habis → Tidak Lanjut
@@ -473,10 +474,35 @@ async function runSnoozeCron() {
 
 // ─── Internal Helpers ─────────────────────────────────────────────────────────
 
-async function _sendProbe(lead, newLevel, mp) {
-  // TODO: Integrasi Meta Cloud API saat WA_ACCESS_TOKEN tersedia
-  // Untuk sekarang: update state saja + log
-  console.log(`[Nurturing] Kirim probe_${newLevel} ke ${lead.nama_lengkap} (${lead.wa})`);
+async function _sendProbe(lead, newLevel, mp, credentials) {
+  const templateName = `probe_${newLevel}`;
+  console.log(`[Nurturing] Kirim ${templateName} ke ${lead.nama_lengkap} (${lead.wa})`);
+
+  if (credentials && credentials.token && credentials.phoneId) {
+    try {
+      await axios.post(
+        `https://graph.facebook.com/v19.0/${credentials.phoneId}/messages`,
+        {
+          messaging_product: 'whatsapp',
+          to: lead.wa,
+          type: 'template',
+          template: { name: templateName, language: { code: 'id' } },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${credentials.token}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 12000,
+        }
+      );
+      console.log(`[Nurturing] ✅ ${templateName} terkirim ke ${lead.wa}`);
+    } catch (err) {
+      console.error(`[Nurturing] ❌ Gagal kirim ${templateName} ke ${lead.wa}:`, err.response?.data?.error?.message || err.message);
+    }
+  } else {
+    console.warn(`[Nurturing] ⚠️ Kredensial Meta tidak tersedia. Mode Mocking untuk ${templateName}`);
+  }
 
   await pool.query(
     `UPDATE siswa_nurturing_state
@@ -494,9 +520,35 @@ async function _sendProbe(lead, newLevel, mp) {
   );
 }
 
-async function _sendSnoozeTemplate(lead, level, mp) {
-  // TODO: Integrasi Meta Cloud API saat WA_ACCESS_TOKEN tersedia
-  console.log(`[Snooze] Kirim snooze_${level} ke ${lead.nama_lengkap} (${lead.wa})`);
+async function _sendSnoozeTemplate(lead, level, mp, credentials) {
+  const templateName = `snooze_${level}`;
+  console.log(`[Snooze] Kirim ${templateName} ke ${lead.nama_lengkap} (${lead.wa})`);
+
+  if (credentials && credentials.token && credentials.phoneId) {
+    try {
+      await axios.post(
+        `https://graph.facebook.com/v19.0/${credentials.phoneId}/messages`,
+        {
+          messaging_product: 'whatsapp',
+          to: lead.wa,
+          type: 'template',
+          template: { name: templateName, language: { code: 'id' } },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${credentials.token}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 12000,
+        }
+      );
+      console.log(`[Snooze] ✅ ${templateName} terkirim ke ${lead.wa}`);
+    } catch (err) {
+      console.error(`[Snooze] ❌ Gagal kirim ${templateName} ke ${lead.wa}:`, err.response?.data?.error?.message || err.message);
+    }
+  } else {
+    console.warn(`[Snooze] ⚠️ Kredensial Meta tidak tersedia. Mode Mocking untuk ${templateName}`);
+  }
 
   const newSnoozeUntil = new Date();
   newSnoozeUntil.setDate(newSnoozeUntil.getDate() + 90);

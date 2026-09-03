@@ -175,6 +175,15 @@ async function handleIncomingMessage(pool, msg, contactMeta, tenantConfig) {
     mediaId  = mediaObj.id        || null;
     mimeType = mediaObj.mime_type || null;
     caption  = mediaObj.caption   || null;
+  } else if (msgType === 'interactive') {
+    const interactive = msg.interactive || {};
+    if (interactive.type === 'button_reply') {
+      body = interactive.button_reply?.title || '';
+    } else if (interactive.type === 'list_reply') {
+      body = interactive.list_reply?.title || '';
+    }
+  } else if (msgType === 'button') {
+    body = msg.button?.text || '';
   }
 
   const fromName    = contactMeta?.profile?.name || fromPhone;
@@ -275,6 +284,38 @@ async function handleIncomingMessage(pool, msg, contactMeta, tenantConfig) {
          WHERE id_siswa = ? AND (bsuid IS NULL OR bsuid = '')`,
         [msg.from, idSiswa]
       );
+    }
+
+    // 6. State Machine: Handoff to CRO untuk respons Snooze / Probing
+    if (idSiswa && body) {
+      const lowerBody = body.toLowerCase();
+      if (
+        lowerBody.includes('mau tanya program') ||
+        lowerBody.includes('jangan sekarang') ||
+        lowerBody.includes('hentikan pesan')
+      ) {
+        // Hentikan campaign bot (snooze & probing)
+        await conn.query(
+          `UPDATE siswa_nurturing_state 
+           SET is_in_campaign = 0, snooze_until = NULL, updated_at = NOW() 
+           WHERE id_siswa = ?`,
+          [idSiswa]
+        );
+        // Handoff ke CRO
+        await conn.query(
+          `UPDATE siswa_periode 
+           SET next_action = 'Follow Up', due_date = NOW() 
+           WHERE id_siswa = ?`,
+          [idSiswa]
+        );
+        // Log Activity
+        await conn.query(
+          `INSERT INTO nurturing_activity_log (id_siswa, activity_type, result, notes, triggered_by)
+           VALUES (?, 'Webhook Handoff', 'Paused by User Reply', ?, 'system')`,
+          [idSiswa, `Siswa merespons: "${body}". Kampanye otomatis dihentikan dan diserahkan ke CRO.`]
+        );
+        console.log(`[Webhook:${tenantConfig.tenantId}] Snooze Handoff untuk siswa: ${idSiswa} (Respons: ${body})`);
+      }
     }
 
     await conn.commit();
