@@ -149,8 +149,8 @@ async function initiateConversation(id_siswa, user) {
 
   // Create new conversation
   const [result] = await pool.query(
-    `INSERT INTO conversations (id_siswa, wa_number, student_name, created_by, status, window_status, created_at)
-     VALUES (?, ?, ?, ?, 'active', 'CLOSED', NOW())`,
+    `INSERT INTO conversations (id_siswa, wa_number, student_name, created_by, status, window_status, created_at, last_msg_ts)
+     VALUES (?, ?, ?, ?, 'active', 'CLOSED', NOW(), NOW())`,
     [id_siswa, waNumber, student.nama_lengkap, user.nama]
   );
 
