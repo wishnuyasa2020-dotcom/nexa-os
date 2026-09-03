@@ -31,6 +31,8 @@ async function getConversationList(user, query = {}) {
   const tab     = query.tab || 'all';      // 'all' | 'unread' | 'waiting'
   const search  = query.search || '';
 
+  console.log(`[Chat] getConversationList - user: ${user.username} (${user.role}), tenantId: ${user.tenantId || 'default'}, tab: ${tab}`);
+
   const whereParts = [];
   const params     = [];
 
@@ -74,6 +76,8 @@ async function getConversationList(user, query = {}) {
   const [[{ total }]] = await pool.query(
     `SELECT COUNT(*) AS total FROM conversations c ${where}`, params
   );
+
+  console.log(`[Chat] Total conversations found: ${total} (where: "${where || 'none'}")`);
 
   // Hitung unread count per konversasi secara dinamis
   const [rows] = await pool.query(
