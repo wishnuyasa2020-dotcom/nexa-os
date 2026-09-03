@@ -120,6 +120,43 @@ async function getConversationList(user, query = {}) {
   };
 }
 
+async function initiateConversation(id_siswa, user) {
+  // Check if conversation already exists
+  const [existing] = await pool.query(
+    'SELECT conv_id FROM conversations WHERE id_siswa = ? LIMIT 1',
+    [id_siswa]
+  );
+  if (existing.length > 0) {
+    return { conv_id: existing[0].conv_id };
+  }
+
+  // If not, fetch student details
+  const [studentRows] = await pool.query(
+    'SELECT wa, bsuid, nama_lengkap FROM master_siswa WHERE id_siswa = ?',
+    [id_siswa]
+  );
+
+  if (studentRows.length === 0) {
+    throw new Error('Siswa tidak ditemukan di master_siswa');
+  }
+
+  const student = studentRows[0];
+  const waNumber = student.wa || student.bsuid;
+
+  if (!waNumber) {
+    throw new Error('Siswa tidak memiliki nomor WA atau BSUID yang bisa dihubungi');
+  }
+
+  // Create new conversation
+  const [result] = await pool.query(
+    `INSERT INTO conversations (id_siswa, wa_number, student_name, created_by, status, window_status, created_at)
+     VALUES (?, ?, ?, ?, 'active', 'CLOSED', NOW())`,
+    [id_siswa, waNumber, student.nama_lengkap, user.nama]
+  );
+
+  return { conv_id: result.insertId };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/chats/:convId/messages — Riwayat pesan dalam satu percakapan
 // ─────────────────────────────────────────────────────────────────────────────
@@ -365,6 +402,7 @@ async function sendToMetaApi(toPhone, text, templatePayload = null) {
 
 module.exports = {
   getConversationList,
+  initiateConversation,
   getMessages,
   sendMessage,
   isServiceWindowOpen,

@@ -18,6 +18,21 @@ async function getConversationList(req, res) {
   }
 }
 
+// POST /api/v1/chats/initiate — Mulai/cari percakapan dengan siswa
+async function initiateConversation(req, res) {
+  try {
+    const { id_siswa } = req.body;
+    if (!id_siswa) {
+      return res.status(400).json({ status: 'error', message: 'id_siswa is required' });
+    }
+    const result = await chatService.initiateConversation(id_siswa, req.user);
+    res.json({ status: 'ok', data: result });
+  } catch (err) {
+    console.error('[Chat] initiateConversation:', err.message);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
 // GET /api/v1/chats/:convId/messages — Riwayat pesan
 async function getMessages(req, res) {
   try {
@@ -60,4 +75,4 @@ async function markAsRead(req, res) {
   }
 }
 
-module.exports = { getConversationList, getMessages, sendMessage, markAsRead };
+module.exports = { getConversationList, initiateConversation, getMessages, sendMessage, markAsRead };

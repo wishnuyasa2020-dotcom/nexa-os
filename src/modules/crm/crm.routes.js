@@ -251,6 +251,7 @@ router.delete('/weekly/agenda/:agendaId',             weeklyCtrl.unscheduleTask)
 // PATCH /api/v1/chats/:convId/read               — Tandai semua pesan sudah dibaca
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/chats',                                  chatCtrl.getConversationList);
+router.post('/chats/initiate',                        chatCtrl.initiateConversation);
 router.get('/chats/:convId/messages',                 chatCtrl.getMessages);
 router.post('/chats/:convId/send',                    chatCtrl.sendMessage);
 router.patch('/chats/:convId/read',                   chatCtrl.markAsRead);
