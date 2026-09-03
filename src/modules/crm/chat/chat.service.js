@@ -106,7 +106,10 @@ async function getConversationList(user, query = {}) {
   );
 
   return {
-    data:  rows,
+    data:  rows.map(r => ({
+      ...r,
+      window_status: r.window_status ? String(r.window_status).toUpperCase() : 'CLOSED',
+    })),
     total: parseInt(total, 10),
     page,
     limit,
