@@ -52,15 +52,19 @@
  */
 
 // ── Daftar variabel yang dikenal engine ───────────────────────────────────────
+// Sinkronkan dengan KNOWN_VARS di frontend (TemplateFormModal.tsx)
 const KNOWN_VARIABLES = {
-  STUDENT_NAME:      (ctx) => String(ctx.namaSiswa   || '').trim(),
-  SCHOOL_NAME:       (ctx) => String(ctx.namaSekolah || '').trim(),
-  STUDENT_ID:        (ctx) => String(ctx.idSiswa     || '').trim(),
-  // ── Tambahkan variabel baru di sini ───────────────────────
-  // CONSULTATION_DATE: (ctx) => String(ctx.consultationDate || '').trim(),
-  // HOME_VISIT_DATE:   (ctx) => String(ctx.homeVisitDate    || '').trim(),
+  STUDENT_NAME:      (ctx) => String(ctx.namaSiswa        || '').trim(),
+  SCHOOL_NAME:       (ctx) => String(ctx.namaSekolah      || '').trim(),
+  STUDENT_ID:        (ctx) => String(ctx.idSiswa          || '').trim(),
+  // ── Variabel tambahan (v2) ────────────────────────────────
+  CONSULTATION_DATE: (ctx) => String(ctx.consultationDate || '').trim(),
+  HOME_VISIT_DATE:   (ctx) => String(ctx.homeVisitDate    || '').trim(),
+  SNOOZE_LEVEL:      (ctx) => String(ctx.snoozeLevel      !== undefined ? ctx.snoozeLevel : '').trim(),
+  // ── Slot untuk variabel masa depan ────────────────────────
   // REGISTRATION_FEE:  (ctx) => String(ctx.registrationFee  || '').trim(),
-  // ──────────────────────────────────────────────────────────
+  // PROGRAM_NAME:      (ctx) => String(ctx.programName      || '').trim(),
+  // ─────────────────────────────────────────────────────────
 };
 
 // ── Resolve satu variabel ke nilainya ─────────────────────────────────────────

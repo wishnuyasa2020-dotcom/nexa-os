@@ -4,27 +4,47 @@
  * template.service.js
  * Service layer untuk manajemen wa_templates
  *
- * PERUBAHAN v2:
- *  - Fix nama kolom: status_meta (DB lama GAS) → meta_status (harmonisasi)
- *    Backend membaca KEDUA kolom (meta_status ATAU status_meta sebagai fallback)
- *  - Tambah: getTemplateById(), deleteTemplate() (soft), updateParameters()
- *  - Tambah: syncMetaStatusFull() — sync termasuk components/buttons
- *  - Refactor: credentials BYOW dibaca dari tenants.whatsapp_* (bukan .env statis)
+ * PERUBAHAN v3:
+ *  - Fix _getTenantWaCredentials(): baca dari nexamain.tenants (BYOW multi-tenant)
+ *    TIDAK lagi bergantung pada .env statis yang melanggar arsitektur Database-per-Tenant
+ *  - Fix _submitTemplateToMeta(): include Header & Buttons di components Meta API
+ *  - Pertahankan fallback .env untuk mode development/single-tenant
  */
 
-const { pool }   = require('../../../config/database');
-const axios      = require('axios');
-const engine     = require('./templateEngine.service');
+const { pool, mainPool, tenantStorage } = require('../../../config/database');
+const axios  = require('axios');
+const engine = require('./templateEngine.service');
 
-// ── Helper: baca credentials BYOW dari tenants table ─────────────────────────
-// pool adalah connection pool ke DB TENANT (sudah diset oleh middleware tenant resolver)
-// Untuk keperluan Meta API call, kita butuh baca credentials dari nexamain.tenants
-// lewat `pool` yang di-inject dari app.js
+// ── Helper: baca credentials BYOW dari nexamain.tenants ─────────────────────
+// Baca whatsapp_phone_id, whatsapp_waba_id, whatsapp_access_token dari tabel nexamain.tenants
+// menggunakan tenantId dari AsyncLocalStorage context (request saat ini).
+// Fallback ke .env untuk mode dev/single-tenant.
 async function _getTenantWaCredentials() {
-  // credentials sudah di-inject ke dalam pool context lewat middleware atau .env
-  // Fallback: baca dari .env untuk backward-compat (dev mode)
-  const token  = process.env.WA_ACCESS_TOKEN;
-  const wabaId = process.env.WA_WABA_ID;
+  // 1. Coba ambil tenantId dari context HTTP request saat ini
+  const tenantId = tenantStorage ? tenantStorage.getStore() : null;
+
+  // 2. Jika ada mainPool dan tenantId, baca dari nexamain.tenants (BYOW multi-tenant)
+  if (mainPool && tenantId) {
+    try {
+      const [rows] = await mainPool.query(
+        'SELECT whatsapp_phone_id, whatsapp_waba_id, whatsapp_access_token FROM tenants WHERE tenant_id = ? LIMIT 1',
+        [tenantId]
+      );
+      if (rows.length > 0 && rows[0].whatsapp_access_token) {
+        return {
+          token:   rows[0].whatsapp_access_token,
+          wabaId:  rows[0].whatsapp_waba_id,
+          phoneId: rows[0].whatsapp_phone_id,
+        };
+      }
+    } catch (e) {
+      console.warn('[Template] Gagal baca credentials dari DB tenant, fallback ke .env:', e.message);
+    }
+  }
+
+  // 3. Fallback ke .env (mode dev atau single-tenant lama)
+  const token   = process.env.WA_ACCESS_TOKEN;
+  const wabaId  = process.env.WA_WABA_ID;
   const phoneId = process.env.WA_PHONE_NUMBER_ID;
   return { token, wabaId, phoneId };
 }
@@ -125,7 +145,7 @@ async function createTemplate(data) {
   let metaTemplId = null;
 
   if (submitToMeta) {
-    const result = await _submitTemplateToMeta({ nama_template, template_name_api, body_text, language_code, kategori });
+    const result = await _submitTemplateToMeta({ nama_template, template_name_api, body_text, language_code, kategori, parameters: parsedParams });
     metaStatus  = 'PENDING';
     metaTemplId = result?.id || null;
   }
@@ -291,13 +311,60 @@ async function syncMetaStatus() {
   return { synced, total_from_meta: metaTemplates.length };
 }
 
-// ── HELPER: Submit template baru ke Meta ──────────────────────────────────────
-async function _submitTemplateToMeta({ nama_template, template_name_api, body_text, language_code, kategori }) {
+// ── HELPER: Submit template baru ke Meta ──────────────────────────────────
+// Menerima payload lengkap termasuk schema parameters (header + body + buttons)
+async function _submitTemplateToMeta(data) {
+  const { nama_template, template_name_api, body_text, language_code, kategori, parameters } = data;
   const { token, wabaId } = await _getTenantWaCredentials();
 
   if (!token || !wabaId) {
     console.warn('[Template] Credentials belum di-set. Submit ke Meta dilewati.');
     return { id: null };
+  }
+
+  // Parse schema JSON untuk build components Meta yang lengkap
+  const schema = parameters ? engine.parseSchema(parameters) : { body: [] };
+
+  // Build components array sesuai spesifikasi Meta Cloud API
+  const components = [];
+
+  // -- HEADER
+  if (schema.header) {
+    const h = schema.header;
+    const headerComp = { type: 'HEADER' };
+    const hType = String(h.type || '').toUpperCase();
+    headerComp.format = hType;
+    if (hType === 'TEXT' && h.text) {
+      headerComp.text = h.text;
+    } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(hType) && h.url) {
+      headerComp.example = { header_handle: [h.url] };
+      if (hType === 'DOCUMENT' && h.filename) headerComp.filename = h.filename;
+    }
+    components.push(headerComp);
+  }
+
+  // -- BODY (wajib)
+  const bodyComp = { type: 'BODY', text: body_text };
+  // Jika ada variabel body, tambahkan example
+  if (schema.body && schema.body.length > 0) {
+    const DUMMY = {
+      STUDENT_NAME: 'Budi Santoso', SCHOOL_NAME: 'SMA Negeri 1', STUDENT_ID: 'SIS-001',
+      CONSULTATION_DATE: '10 Sep 2026', HOME_VISIT_DATE: '12 Sep 2026', SNOOZE_LEVEL: '1',
+    };
+    bodyComp.example = { body_text: [schema.body.map(v => DUMMY[v] || v)] };
+  }
+  components.push(bodyComp);
+
+  // -- BUTTONS
+  if (schema.buttons && schema.buttons.length > 0) {
+    const metaButtons = schema.buttons.map(btn => {
+      const bType = String(btn.type || '').toUpperCase();
+      const metaBtn = { type: bType, text: btn.label || btn.text || '' };
+      if (bType === 'URL')          metaBtn.url           = btn.url || '';
+      if (bType === 'PHONE_NUMBER') metaBtn.phone_number  = btn.phone_number || btn.value || '';
+      return metaBtn;
+    });
+    components.push({ type: 'BUTTONS', buttons: metaButtons });
   }
 
   const resp = await axios.post(
@@ -306,7 +373,7 @@ async function _submitTemplateToMeta({ nama_template, template_name_api, body_te
       name:       template_name_api || nama_template.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
       language:   language_code || 'id',
       category:   kategori || 'UTILITY',
-      components: [{ type: 'BODY', text: body_text }],
+      components,
     },
     {
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
