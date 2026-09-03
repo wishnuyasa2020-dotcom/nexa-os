@@ -209,6 +209,7 @@ async function login(username, password) {
     username: String(rows.username).trim(),
     nama:     String(rows.nama    || '').trim(),
     role:     String(rows.role    || '').trim(),
+    tenant_id: isTenant ? tenantId : 'Nexa Utama',
   };
 
   const payload = { ...user, selectedPeriod: activePeriod };
