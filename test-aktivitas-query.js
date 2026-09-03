@@ -9,13 +9,16 @@ async function test() {
     database: tenant[0].db_name
   });
 
-  const [rows] = await pool.query("SELECT * FROM master_siswa WHERE id_siswa = 'STD-000159'");
-  console.log('master_siswa:', rows);
-
-  const [rows2] = await pool.query("SELECT * FROM siswa WHERE id_siswa = 'STD-000159'");
-  console.log('siswa:', rows2);
-
+  try {
+    const [rows] = await pool.query(
+      "SELECT *, DATE_FORMAT(tanggal, '%Y-%m-%d') as tanggal FROM aktivitas_siswa WHERE id_siswa = ? ORDER BY tanggal DESC, created_at DESC",
+      ['STD-000001']
+    );
+    console.log('Query success! Rows:', rows.length);
+  } catch (err) {
+    console.error('Query failed:', err.message);
+  }
   process.exit();
 }
 
-test().catch(console.error);
+test();

@@ -9,13 +9,13 @@ async function test() {
     database: tenant[0].db_name
   });
 
-  const [rows] = await pool.query("SELECT * FROM master_siswa WHERE id_siswa = 'STD-000159'");
-  console.log('master_siswa:', rows);
-
-  const [rows2] = await pool.query("SELECT * FROM siswa WHERE id_siswa = 'STD-000159'");
-  console.log('siswa:', rows2);
+  const [rows] = await pool.query('SHOW COLUMNS FROM aktivitas_siswa');
+  console.log('aktivitas_siswa columns:', rows.map(r => r.Field));
 
   process.exit();
 }
 
-test().catch(console.error);
+test().catch(err => {
+  console.error('ERROR:', err.message);
+  process.exit();
+});
