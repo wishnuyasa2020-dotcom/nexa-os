@@ -244,13 +244,13 @@ async function handleIncomingMessage(pool, msg, contactMeta, tenantConfig) {
       idSiswa = convRows[0].id_siswa;
     }
 
-    // 2. Insert pesan (idempotent via IGNORE jika ada UNIQUE key di message_id)
+    // 2. Insert pesan
     await conn.query(
-      `INSERT IGNORE INTO chat_messages
-         (conv_id, meta_message_id, timestamp, datetime, direction, from_phone, from_name,
+      `INSERT INTO chat_messages
+         (conv_id, timestamp, datetime, direction, from_phone, from_name,
           type, body, media_id, mime_type, caption, status)
-       VALUES (?, ?, ?, ?, 'incoming', ?, ?, ?, ?, ?, ?, ?, 'received')`,
-      [convId, metaMessageId, msg.timestamp || Math.floor(Date.now() / 1000), timestamp,
+       VALUES (?, ?, ?, 'incoming', ?, ?, ?, ?, ?, ?, ?, 'received')`,
+      [convId, msg.timestamp || Math.floor(Date.now() / 1000), timestamp,
        fromPhone, fromName, msgType, body, mediaId, mimeType, caption]
     );
 
