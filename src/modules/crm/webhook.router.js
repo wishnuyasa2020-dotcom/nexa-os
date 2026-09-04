@@ -215,21 +215,23 @@ async function handleIncomingMessage(pool, msg, contactMeta, tenantConfig) {
       }
       if (!siswa) {
         const [waRows] = await conn.query(
-          'SELECT id_siswa, nama_lengkap FROM master_siswa WHERE no_wa = ? ORDER BY id_siswa ASC LIMIT 1',
+          'SELECT id_siswa, nama_lengkap FROM master_siswa WHERE wa = ? ORDER BY id_siswa ASC LIMIT 1',
           [phoneClean]
         );
         siswa = waRows[0] || null;
       }
       idSiswa = siswa ? siswa.id_siswa : null;
 
+      convId = `CONV-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const [insertConv] = await conn.query(
         `INSERT INTO conversations
-           (id_siswa, wa_number, student_name, started_by, status, window_status,
+           (conv_id, id_siswa, wa_number, student_name, started_by, status, window_status,
             window_opened_at, window_expires_at, last_message_type,
             last_message_prev, last_sender, last_msg_ts)
-         VALUES (?, ?, ?, 'customer', 'OPEN', 'OPEN', NOW(), DATE_ADD(NOW(), INTERVAL 24 HOUR),
+         VALUES (?, ?, ?, ?, 'customer', 'OPEN', 'OPEN', NOW(), DATE_ADD(NOW(), INTERVAL 24 HOUR),
                  ?, ?, ?, NOW())`,
         [
+          convId,
           idSiswa,
           phoneClean,
           siswa?.nama_lengkap || fromName,
@@ -238,7 +240,6 @@ async function handleIncomingMessage(pool, msg, contactMeta, tenantConfig) {
           fromPhone,
         ]
       );
-      convId = insertConv.insertId;
     } else {
       convId  = convRows[0].conv_id;
       idSiswa = convRows[0].id_siswa;

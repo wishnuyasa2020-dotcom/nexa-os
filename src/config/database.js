@@ -24,7 +24,7 @@ const mainPool = mysql.createPool({
   connectionLimit: 5,
   waitForConnections: true,
   queueLimit:      0,
-  timezone:        '+07:00',
+  timezone:        'Z',
   charset:         'utf8mb4',
   enableKeepAlive: true,
   keepAliveInitialDelay: 10000,
@@ -40,7 +40,7 @@ const pool = mysql.createPool({
   connectionLimit: 10,           // max simultaneous connections
   waitForConnections: true,
   queueLimit:      0,
-  timezone:        '+07:00',     // WIB
+  timezone:        'Z',     // Server MySQL ternyata di UTC
   charset:         'utf8mb4',
   enableKeepAlive: true,
   keepAliveInitialDelay: 10000,
