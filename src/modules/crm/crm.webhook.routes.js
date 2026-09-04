@@ -331,19 +331,18 @@ async function handleStatusUpdate(statusEvt) {
 
   if (!waMessageId || !status) return;
 
-  // Update status di chat_messages jika ada kolom wa_message_id
-  // Fallback: update berdasarkan timestamp jika kolom belum ada
   try {
-    await pool.query(
+    const [res] = await pool.query(
       `UPDATE chat_messages SET status = ?
-       WHERE direction = 'outgoing'
-         AND JSON_EXTRACT(body, '$.wa_msg_id') = ?
-         OR from_phone = ? AND status != 'read'
+       WHERE message_id = ? OR (direction = 'outgoing' AND from_phone = ? AND status != 'read')
        LIMIT 1`,
       [status, waMessageId, statusEvt.recipient_id || '']
     );
-  } catch {
-    // Tabel mungkin belum punya kolom wa_msg_id — abaikan untuk sekarang
+    if (res.affectedRows === 0) {
+      console.warn(`[Webhook Global] Status update failed, wamid not found: ${waMessageId}`);
+    }
+  } catch (err) {
+    console.error(`[Webhook Global] DB Error on Status Update:`, err.message);
   }
 }
 
