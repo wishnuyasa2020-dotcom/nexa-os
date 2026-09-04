@@ -278,6 +278,37 @@ async function handleIncomingMessage(msg, contactMeta) {
 
     await conn.commit();
     console.log(`[Webhook] Pesan masuk disimpan — conv: ${convId}, dari: ${fromPhone}`);
+
+    // Trigger Web Push Notification
+    try {
+      const webpush = require('web-push');
+      if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+        webpush.setVapidDetails(
+          'mailto:support@nexa.id',
+          process.env.VAPID_PUBLIC_KEY,
+          process.env.VAPID_PRIVATE_KEY
+        );
+
+        const [subs] = await conn.query('SELECT endpoint, p256dh, auth FROM push_subscriptions');
+        if (subs.length > 0) {
+          const payload = JSON.stringify({
+            title: `Pesan baru dari ${fromName}`,
+            body: body ? (body.length > 50 ? body.substring(0, 50) + '...' : body) : `[${msgType}]`,
+            icon: '/nexa-icon.png'
+          });
+
+          subs.forEach(sub => {
+            const pushSub = { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } };
+            webpush.sendNotification(pushSub, payload).catch(e => {
+              console.error(`[WebPush] Failed to send to endpoint ${sub.endpoint.substring(0, 30)}... : ${e.message}`);
+            });
+          });
+        }
+      }
+    } catch(pushErr) {
+      console.error(`[WebPush] Trigger error:`, pushErr.message);
+    }
+
   } catch (err) {
     await conn.rollback();
     // ER_DUP_ENTRY = idempotency guard, bukan error nyata

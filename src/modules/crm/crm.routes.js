@@ -9,6 +9,7 @@ const weeklyCtrl      = require('./weekly/weekly.controller');
 const nurturingCtrl   = require('./nurturing/nurturing.controller');
 const chatCtrl        = require('./chat/chat.controller');
 const templateCtrl    = require('./chat/template.controller');
+const webpushCtrl     = require('./chat/webpush.controller');
 const userCtrl        = require('./crm.user.controller');
 const settingsCtrl    = require('./crm.settings.controller');
 const calendarRoutes  = require('./calendar/calendar.routes');
@@ -256,6 +257,11 @@ router.post('/chats/initiate',                        chatCtrl.initiateConversat
 router.get('/chats/:convId/messages',                 chatCtrl.getMessages);
 router.post('/chats/:convId/send',                    chatCtrl.sendMessage);
 router.patch('/chats/:convId/read',                   chatCtrl.markAsRead);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WEB PUSH SUBSCRIPTION
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/web-push/subscribe',                    webpushCtrl.subscribe);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEMPLATE MANAGER — V1 RESTful
