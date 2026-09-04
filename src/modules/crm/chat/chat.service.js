@@ -277,12 +277,14 @@ async function sendMessage(convId, payload, user) {
 
     // 5. Simpan pesan ke DB
     const nowTs = Math.floor(Date.now() / 1000);
+    const msgIdToInsert = waMessageId || `local-${Date.now()}-${Math.floor(Math.random()*1000)}`;
     await conn.query(
       `INSERT INTO chat_messages
-         (conv_id, timestamp, datetime, direction, from_phone, from_name,
+         (message_id, conv_id, timestamp, datetime, direction, from_phone, from_name,
           type, body, status)
-       VALUES (?, ?, NOW(), 'outgoing', 'system', ?, 'text', ?, ?)`,
+       VALUES (?, ?, ?, NOW(), 'outgoing', 'system', ?, 'text', ?, ?)`,
       [
+        msgIdToInsert,
         convId,
         nowTs,
         user.nama || 'CRO',

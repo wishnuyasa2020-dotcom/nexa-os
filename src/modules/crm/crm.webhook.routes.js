@@ -228,11 +228,11 @@ async function handleIncomingMessage(msg, contactMeta) {
 
     // 2. Insert pesan — IDEMPOTENT (tolak duplikat dari Meta retry)
     await conn.query(
-      `INSERT INTO chat_messages
-         (conv_id, timestamp, datetime, direction, from_phone, from_name,
+      `INSERT IGNORE INTO chat_messages
+         (message_id, conv_id, timestamp, datetime, direction, from_phone, from_name,
           type, body, media_id, mime_type, caption, status)
-       VALUES (?, ?, ?, 'incoming', ?, ?, ?, ?, ?, ?, ?, 'received')`,
-      [convId, msg.timestamp || Math.floor(Date.now() / 1000), timestamp,
+       VALUES (?, ?, ?, ?, 'incoming', ?, ?, ?, ?, ?, ?, ?, 'received')`,
+      [metaMessageId || `inc-${Date.now()}`, convId, msg.timestamp || Math.floor(Date.now() / 1000), timestamp,
        fromPhone, fromName, msgType, body, mediaId, mimeType, caption]
     );
     // Catatan: jika chat_messages memiliki UNIQUE(message_id), tambahkan kolom tersebut
