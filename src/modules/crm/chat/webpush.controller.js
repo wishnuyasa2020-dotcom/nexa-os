@@ -12,13 +12,18 @@ async function subscribe(req, res) {
 
     const userId = req.user.id;
 
-    // Simpan atau update subscription
-    await pool.query(
-      `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
-       VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP, p256dh = VALUES(p256dh), auth = VALUES(auth)`,
-      [userId, endpoint, keys.p256dh, keys.auth]
-    );
+    const [existing] = await pool.query('SELECT id FROM push_subscriptions WHERE endpoint = ? LIMIT 1', [endpoint]);
+    if (existing.length > 0) {
+      await pool.query(
+        'UPDATE push_subscriptions SET user_id = ?, p256dh = ?, auth = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [userId, keys.p256dh, keys.auth, existing[0].id]
+      );
+    } else {
+      await pool.query(
+        'INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)',
+        [userId, endpoint, keys.p256dh, keys.auth]
+      );
+    }
 
     res.json({ status: 'ok', message: 'Subscription saved' });
   } catch (err) {

@@ -261,7 +261,7 @@ router.patch('/chats/:convId/read',                   chatCtrl.markAsRead);
 // ─────────────────────────────────────────────────────────────────────────────
 // WEB PUSH SUBSCRIPTION
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/web-push/subscribe',                    webpushCtrl.subscribe);
+router.post('/web-push/subscribe',                    requireAuth, webpushCtrl.subscribe);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEMPLATE MANAGER — V1 RESTful
