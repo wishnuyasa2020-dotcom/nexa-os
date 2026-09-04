@@ -79,6 +79,7 @@ router.post('/siswa',                                 siswaCtrl.createSiswa);
 router.put('/siswa/:id',                              siswaCtrl.updateSiswa);
 router.delete('/siswa/:id',                           siswaCtrl.deleteSiswa);
 router.post('/siswa/:id/aktivitas',                   siswaCtrl.addAktivitas);
+router.patch('/siswa/:id/aktivitas/:logId/koreksi',   siswaCtrl.koreksiAktivitas);
 router.post('/siswa/batch',                           siswaCtrl.importBatch);
 
 

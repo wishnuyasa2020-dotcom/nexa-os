@@ -422,6 +422,65 @@ async function inputAktivitas(id, data, user) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PATCH /api/v1/siswa/:id/aktivitas/:logId/koreksi — Koreksi Aktivitas
+// ─────────────────────────────────────────────────────────────────────────────
+async function koreksiAktivitas(idSiswa, logId, data, user) {
+  const [logRows] = await pool.query("SELECT * FROM aktivitas_siswa WHERE id = ? AND id_siswa = ?", [logId, idSiswa]);
+  if (logRows.length === 0) throw new Error('Log aktivitas tidak ditemukan.');
+  
+  const log = logRows[0];
+  const now = new Date();
+  const logTime = new Date(log.created_at);
+  const diffHours = (now - logTime) / (1000 * 60 * 60);
+
+  if (user.role === 'CRO' && diffHours > 1) {
+    throw new Error('Batas waktu koreksi untuk CRO maksimal 1 jam setelah diinput.');
+  }
+  if (user.role === 'Manager' && diffHours > 24) {
+    throw new Error('Batas waktu koreksi untuk Manager maksimal 24 jam.');
+  }
+
+  const config = HASIL_AKTIVITAS_SISWA[data.hasil_aktivitas];
+  if (!config) throw new Error('Hasil aktivitas tidak dikenali oleh sistem CRM.');
+
+  const statusSesudah = config.status;
+  const nextAction = config.nextAction;
+  const dueDate = config.isTerminal ? null : data.due_date;
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    await conn.query(`
+      UPDATE aktivitas_siswa 
+      SET jenis_aktivitas = ?, hasil_aktivitas = ?, status_sesudah = ?, next_action = ?, due_date = ?, catatan = ?
+      WHERE id = ?
+    `, [data.jenis_aktivitas, data.hasil_aktivitas, statusSesudah, nextAction, dueDate, data.catatan, logId]);
+
+    // Override siswa_periode if this is the latest log
+    const [latest] = await conn.query("SELECT id FROM aktivitas_siswa WHERE id_siswa = ? ORDER BY created_at DESC LIMIT 1", [idSiswa]);
+    if (latest.length > 0 && latest[0].id == logId) {
+      let mp = user.selectedPeriod;
+      if (!mp || mp === '-') mp = await getActivePeriod();
+      
+      await conn.query(`
+        UPDATE siswa_periode 
+        SET status_terkini = ?, next_action = ?, due_date = ?
+        WHERE id_siswa = ? AND marketing_period = ?
+      `, [statusSesudah, nextAction, dueDate, idSiswa, mp]);
+    }
+
+    await conn.commit();
+    return { statusSesudah, nextAction };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/siswa/batch — Import Massal dari Excel
 // ─────────────────────────────────────────────────────────────────────────────
 async function importBatch(dataBatch, croName, user) {
@@ -528,5 +587,6 @@ module.exports = {
   editSiswa,
   hapusSiswa,
   inputAktivitas,
+  koreksiAktivitas,
   importBatch
 };

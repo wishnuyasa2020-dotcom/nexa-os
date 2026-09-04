@@ -92,6 +92,17 @@ async function importBatch(req, res) {
 }
 
 
+// ── PATCH /api/v1/siswa/:id/aktivitas/:logId/koreksi ────────────────────────
+async function koreksiAktivitas(req, res) {
+  try {
+    const data = await svc.koreksiAktivitas(req.params.id, req.params.logId, req.body, req.user);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[siswa] koreksiAktivitas Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
 module.exports = {
   getList,
   getDetail,
@@ -99,5 +110,6 @@ module.exports = {
   updateSiswa,
   deleteSiswa,
   addAktivitas,
+  koreksiAktivitas,
   importBatch
 };
