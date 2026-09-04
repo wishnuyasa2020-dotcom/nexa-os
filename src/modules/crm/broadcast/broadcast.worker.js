@@ -65,44 +65,70 @@ async function _getCredentials(tenantId) {
 }
 
 // ── Helper: kirim 1 pesan ke Meta WA Cloud API ───────────────────────────────
-async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageCode, parameters }) {
+async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageCode, parameters, isSwOpen, bodyText }) {
   if (!phoneId || !token) {
     console.warn('[Broadcast Worker] Credentials belum di-set. Pesan tidak dikirim (dev mode).');
     return { wamid: `DEV-${Date.now()}`, dev: true };
   }
 
-  // Parse parameters: bisa berupa JSON string atau array
-  let parsedParams = [];
-  if (parameters) {
-    try {
-      const raw = typeof parameters === 'string' ? JSON.parse(parameters) : parameters;
-      // Support format: { body: [...], buttons: [...] } atau array lama
-      parsedParams = Array.isArray(raw) ? raw : (raw.body || []);
-    } catch {
-      parsedParams = [];
+  let payload;
+
+  // Jika SW open dan tidak ada template_name_api (berarti ini LOCAL_ONLY), kirim sebagai text biasa.
+  if (isSwOpen && !templateNameApi) {
+    // Substitusi variabel manual jika ada
+    let finalBody = bodyText || '';
+    if (parameters) {
+      let parsedParams = [];
+      try {
+        const raw = typeof parameters === 'string' ? JSON.parse(parameters) : parameters;
+        parsedParams = Array.isArray(raw) ? raw : (raw.body || []);
+      } catch {
+        parsedParams = [];
+      }
+      parsedParams.forEach((val, i) => {
+        finalBody = finalBody.split(`{{${i + 1}}}`).join(String(val));
+      });
     }
+
+    payload = {
+      messaging_product: 'whatsapp',
+      to: toPhone,
+      type: 'text',
+      text: {
+        body: finalBody
+      }
+    };
+  } else {
+    // SW closed ATAU (SW open tapi template APPROVED) -> Kirim via Template API
+    let parsedParams = [];
+    if (parameters) {
+      try {
+        const raw = typeof parameters === 'string' ? JSON.parse(parameters) : parameters;
+        parsedParams = Array.isArray(raw) ? raw : (raw.body || []);
+      } catch {
+        parsedParams = [];
+      }
+    }
+
+    const components = [];
+    if (parsedParams.length > 0) {
+      components.push({
+        type: 'body',
+        parameters: parsedParams.map(v => ({ type: 'text', text: String(v) })),
+      });
+    }
+
+    payload = {
+      messaging_product: 'whatsapp',
+      to: toPhone,
+      type: 'template',
+      template: {
+        name: templateNameApi,
+        language: { code: languageCode || 'id' },
+        components,
+      },
+    };
   }
-
-  const components = [];
-
-  // Body component dengan parameter (jika ada variabel {{1}}, {{2}}, dst)
-  if (parsedParams.length > 0) {
-    components.push({
-      type:       'body',
-      parameters: parsedParams.map(v => ({ type: 'text', text: String(v) })),
-    });
-  }
-
-  const payload = {
-    messaging_product: 'whatsapp',
-    to:   toPhone,
-    type: 'template',
-    template: {
-      name:       templateNameApi,
-      language:   { code: languageCode || 'id' },
-      components,
-    },
-  };
 
   const resp = await axios.post(
     `https://graph.facebook.com/${META_API_VER}/${phoneId}/messages`,
@@ -137,6 +163,8 @@ async function processBroadcastQueue(credentials) {
          bq.wa_number,
          bq.template_name_api,
          bq.language_code,
+         bq.is_sw_open,
+         bq.body_text,
          wt.parameters
        FROM broadcast_queue bq
        LEFT JOIN wa_templates wt ON wt.template_name_api = bq.template_name_api
@@ -169,6 +197,8 @@ async function processBroadcastQueue(credentials) {
           templateNameApi: row.template_name_api,
           languageCode:    row.language_code,
           parameters:      row.parameters,
+          isSwOpen:        row.is_sw_open,
+          bodyText:        row.body_text,
         });
 
         // Update status → terkirim

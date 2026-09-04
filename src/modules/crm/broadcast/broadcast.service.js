@@ -264,7 +264,7 @@ async function createBroadcastJob(user, body = {}) {
 
   if (metaTemplateId) {
     const [rows] = await pool.query(
-      'SELECT id_template, nama_template, template_name_api, language_code FROM wa_templates WHERE id_template = ? LIMIT 1',
+      'SELECT id_template, nama_template, template_name_api, language_code, body_text FROM wa_templates WHERE id_template = ? LIMIT 1',
       [metaTemplateId]
     );
     if (rows.length > 0) metaTemplate = rows[0];
@@ -272,7 +272,7 @@ async function createBroadcastJob(user, body = {}) {
 
   if (crmTemplateId) {
     const [rows] = await pool.query(
-      'SELECT id_template, nama_template, template_name_api, language_code FROM wa_templates WHERE id_template = ? LIMIT 1',
+      'SELECT id_template, nama_template, template_name_api, language_code, body_text FROM wa_templates WHERE id_template = ? LIMIT 1',
       [crmTemplateId]
     );
     if (rows.length > 0) crmTemplate = rows[0];
@@ -354,6 +354,8 @@ async function createBroadcastJob(user, body = {}) {
         activeTpl?.language_code     || 'id', // language_code
         'antri',              // status
         now,                  // created_at
+        s.isSwOpen ? 1 : 0,   // is_sw_open
+        activeTpl?.body_text || '' // body_text
       ];
     });
 
@@ -361,7 +363,7 @@ async function createBroadcastJob(user, body = {}) {
       await conn.query(
         `INSERT INTO broadcast_queue
            (id_queue, id_broadcast, id_siswa, nama_siswa, wa_number,
-            template_name_api, language_code, status, created_at)
+            template_name_api, language_code, status, created_at, is_sw_open, body_text)
          VALUES ?`,
         [queueRows]
       );
