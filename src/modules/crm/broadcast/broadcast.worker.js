@@ -119,22 +119,17 @@ async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageC
   return { wamid: resp.data?.messages?.[0]?.id || null };
 }
 
-// ── Main Worker: proses 1 batch dari broadcast_queue ─────────────────────────
-async function processBroadcastQueue() {
-  // Cegah overlap run
-  if (_isRunning) {
-    console.log('[Broadcast Worker] Masih berjalan, skip tick ini.');
-    return { skipped: true };
-  }
-  _isRunning = true;
-
+// ── Main Worker: proses 1 batch dari broadcast_queue (per tenant) ──────────
+async function processBroadcastQueue(credentials) {
   let processed = 0;
   let success   = 0;
   let failed    = 0;
+  
+  const phoneId = credentials?.phoneId;
+  const token = credentials?.token;
 
   try {
-    // Ambil batch antrian yang menunggu — gunakan FOR UPDATE untuk lock row
-    const [rows] = await pool.query(
+      const [rows] = await pool.query(
       `SELECT
          bq.id_queue,
          bq.id_broadcast,
@@ -142,7 +137,6 @@ async function processBroadcastQueue() {
          bq.wa_number,
          bq.template_name_api,
          bq.language_code,
-         bq.tenant_id,
          wt.parameters
        FROM broadcast_queue bq
        LEFT JOIN wa_templates wt ON wt.template_name_api = bq.template_name_api
@@ -166,7 +160,6 @@ async function processBroadcastQueue() {
     // Proses satu per satu
     for (const row of rows) {
       processed++;
-      const { phoneId, token } = await _getCredentials(row.tenant_id);
 
       try {
         const { wamid } = await _sendToMeta({
@@ -247,29 +240,56 @@ async function processBroadcastQueue() {
   } catch (err) {
     console.error('[Broadcast Worker] ❌ Error fatal:', err.message);
     return { processed, success, failed, error: err.message };
-  } finally {
-    _isRunning = false;
   }
 }
 
 // ── Init: daftarkan cron setiap 1 menit ──────────────────────────────────────
 function initBroadcastWorker() {
   const cron = require('node-cron');
+  const { tenantStorage } = require('../../../config/database');
 
   cron.schedule('* * * * *', async () => {
-    const result = await processBroadcastQueue();
-    if (result.skipped) return;
-    if (result.processed > 0) {
-      console.log(
-        `[Broadcast Worker] ⚡ Proses: ${result.processed} | ✅ ${result.success} terkirim | ❌ ${result.failed} gagal`
-      );
+    if (_isRunning) {
+      console.log('[Broadcast Worker] Masih berjalan, skip tick ini.');
+      return;
     }
+    _isRunning = true;
+
+    try {
+      const [tenants] = await mainPool.query(
+        'SELECT tenant_id, whatsapp_phone_id, whatsapp_access_token FROM tenants WHERE status = "ACTIVE"'
+      );
+
+      for (const tenant of tenants) {
+        if (!tenant.tenant_id) continue;
+        
+        await tenantStorage.run(tenant.tenant_id, async () => {
+          try {
+            const credentials = {
+              phoneId: tenant.whatsapp_phone_id,
+              token: tenant.whatsapp_access_token
+            };
+            const result = await processBroadcastQueue(credentials);
+            if (result.processed > 0) {
+              console.log(`[Broadcast Worker][${tenant.tenant_id}] ⚡ Proses: ${result.processed} | ✅ ${result.success} terkirim | ❌ ${result.failed} gagal`);
+            }
+          } catch (e) {
+            console.error(`[Broadcast Worker][${tenant.tenant_id}] error:`, e.message);
+          }
+        });
+      }
+    } catch (err) {
+      console.error('[Broadcast Worker] Error fetching tenants:', err.message);
+    } finally {
+      _isRunning = false;
+    }
+
   }, {
     scheduled: true,
     timezone:  'Asia/Jakarta',
   });
 
-  console.log('[Broadcast Worker] Scheduler terdaftar → setiap 1 menit.');
+  console.log('[Broadcast Worker] Scheduler terdaftar → setiap 1 menit (Multi-Tenant).');
 }
 
 module.exports = { initBroadcastWorker, processBroadcastQueue };
