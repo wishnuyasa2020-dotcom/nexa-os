@@ -179,11 +179,13 @@ async function getMessages(convId, query = {}) {
   const params = [convId];
 
   if (before) {
+    // Note: jika before dipakai, harusnya menggunakan datetime dari message tersebut,
+    // tapi karena saat ini ui belum pass 'before', kita fallback dulu ke id.
     sql += ' AND message_id < ?';
     params.push(before);
   }
 
-  sql += ' ORDER BY message_id DESC LIMIT ?';
+  sql += ' ORDER BY datetime DESC, timestamp DESC LIMIT ?';
   params.push(limit);
 
   const [messages] = await pool.query(sql, params);
