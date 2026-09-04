@@ -374,7 +374,7 @@ async function handleStatusUpdate(pool, statusEvt) {
   try {
     await pool.query(
       `UPDATE chat_messages SET status = ?
-       WHERE meta_message_id = ? OR (direction = 'outgoing' AND from_phone = ? AND status != 'read')
+       WHERE message_id = ? OR (direction = 'outgoing' AND from_phone = ? AND status != 'read')
        LIMIT 1`,
       [status, waMessageId, statusEvt.recipient_id || '']
     );
