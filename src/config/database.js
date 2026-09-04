@@ -56,7 +56,7 @@ function getDynamicPool(config) {
     database: config.database,
     connectionLimit: 5,
     waitForConnections: true,
-    timezone: '+07:00',
+    timezone: 'Z',
     charset: 'utf8mb4',
     enableKeepAlive: true,
     keepAliveInitialDelay: 10000,

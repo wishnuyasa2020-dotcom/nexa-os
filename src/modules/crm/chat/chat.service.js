@@ -110,10 +110,23 @@ async function getConversationList(user, query = {}) {
   );
 
   return {
-    data:  rows.map(r => ({
-      ...r,
-      window_status: r.window_status ? String(r.window_status).toUpperCase() : 'CLOSED',
-    })),
+    data:  rows.map(r => {
+      let isExpired = false;
+      if (r.window_expires_at) {
+        // Evaluate dynamic expiration based on the date
+        const expTime = new Date(r.window_expires_at).getTime();
+        // Since the UI applies a +7 offset automatically by parsing the ISO string, 
+        // we can safely rely on the UTC timestamps for comparison in node.js as well.
+        isExpired = expTime < Date.now();
+      } else {
+        isExpired = true;
+      }
+
+      return {
+        ...r,
+        window_status: isExpired ? 'CLOSED' : (r.window_status ? String(r.window_status).toUpperCase() : 'CLOSED'),
+      };
+    }),
     total: parseInt(total, 10),
     page,
     limit,
