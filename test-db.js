@@ -1,21 +1,14 @@
-const { mainPool, getDynamicPool } = require('./src/config/database');
-
-async function test() {
-  const [tenant] = await mainPool.query('SELECT * FROM tenant_databases WHERE tenant_id = ?', ['derma-indonesia']);
-  const pool = getDynamicPool({
-    host: tenant[0].db_host,
-    user: tenant[0].db_user,
-    password: tenant[0].db_password,
-    database: tenant[0].db_name
-  });
-
-  const [rows] = await pool.query("SELECT * FROM master_siswa WHERE id_siswa = 'STD-000159'");
-  console.log('master_siswa:', rows);
-
-  const [rows2] = await pool.query("SELECT * FROM siswa WHERE id_siswa = 'STD-000159'");
-  console.log('siswa:', rows2);
-
-  process.exit();
-}
-
-test().catch(console.error);
+const { pool, tenantStorage } = require('./src/config/database');
+tenantStorage.run('derma-indonesia', async () => {
+  try {
+    const [result] = await pool.query(
+      "UPDATE chat_messages SET status = ? WHERE message_id = ? OR (direction = 'outgoing' AND from_phone = ? AND status != 'read') LIMIT 1",
+      ['read', 'wamid.HBgNNjI4NTY1OTAyNDc3NRUCABEYEkU2QzlERkZBOUREMDlGMEU2RAA=', '6285659024775']
+    );
+    console.log('Affected rows:', result.affectedRows);
+  } catch(e) {
+    console.log('Error:', e.message);
+  } finally {
+    pool.end();
+  }
+});

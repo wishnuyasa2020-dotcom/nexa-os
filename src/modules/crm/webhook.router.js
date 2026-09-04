@@ -373,14 +373,17 @@ async function handleStatusUpdate(pool, statusEvt) {
   if (!waMessageId || !status) return;
 
   try {
-    await pool.query(
+    const [res] = await pool.query(
       `UPDATE chat_messages SET status = ?
        WHERE message_id = ? OR (direction = 'outgoing' AND from_phone = ? AND status != 'read')
        LIMIT 1`,
       [status, waMessageId, statusEvt.recipient_id || '']
     );
-  } catch {
-    // Abaikan jika kolom meta_message_id belum ada
+    if (res.affectedRows === 0) {
+      console.warn(`[Webhook] Status update failed, wamid not found: ${waMessageId}`);
+    }
+  } catch (err) {
+    console.error(`[Webhook] DB Error on Status Update:`, err.message);
   }
 }
 
