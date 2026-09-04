@@ -1725,8 +1725,8 @@ async function createBroadcast(params, user) {
   if (tpl.status_crm !== 'Aktif' && tpl.status_crm !== 'Active' && tpl.status_crm !== 'AKTIF' && tpl.status_crm !== 'ACTIVE') {
     throw new Error(`Template "${tpl.nama_template}" memiliki status CRM tidak aktif (${tpl.status_crm}).`);
   }
-  if (tpl.status_meta !== 'APPROVED') {
-    throw new Error(`Template "${tpl.nama_template}" belum disetujui oleh Meta (Status Meta: ${tpl.status_meta}).`);
+  if (tpl.meta_status !== 'APPROVED') {
+    throw new Error(`Template "${tpl.nama_template}" belum disetujui oleh Meta (Status Meta: ${tpl.meta_status}).`);
   }
 
   const excludedIds = params.excludedIds || [];

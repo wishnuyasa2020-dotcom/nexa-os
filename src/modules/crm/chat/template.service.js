@@ -53,8 +53,7 @@ async function _getTenantWaCredentials() {
 function _normalizeRow(row) {
   return {
     ...row,
-    // Harmonisasi: meta_status bisa ada sebagai kolom baru ATAU fallback dari status_meta
-    meta_status: row.meta_status || row.status_meta || 'LOCAL_ONLY',
+    meta_status: row.meta_status || 'LOCAL_ONLY',
   };
 }
 
@@ -73,9 +72,8 @@ async function getTemplates(query = {}) {
   const params     = [];
 
   if (status) {
-    // Support both column names for transition period
-    whereParts.push('(meta_status = ? OR status_meta = ?)');
-    params.push(status, status);
+    whereParts.push('meta_status = ?');
+    params.push(status);
   }
   if (pipeline) {
     whereParts.push('pipeline = ?');
@@ -155,10 +153,10 @@ async function createTemplate(data) {
   const [inserted] = await pool.query(
     `INSERT INTO wa_templates
        (id_template, pipeline, nama_template, template_name_api, language_code,
-        body_text, kategori, urutan, status_crm, meta_status, status_meta,
+        body_text, kategori, urutan, status_crm, meta_status,
         meta_template_id, parameters, header_type, header_url, header_filename,
         created_date, last_updated)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
     [
       `TPL-${Date.now()}`,
       pipeline || null,
@@ -169,7 +167,6 @@ async function createTemplate(data) {
       kategori || 'UTILITY',
       urutan,
       metaStatus,
-      metaStatus, // status_meta = sama (backward compat)
       metaTemplId,
       JSON.stringify(parsedParams),
       header_type || null,
@@ -270,6 +267,11 @@ async function deleteTemplate(id) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/templates/sync — Sinkronisasi status + buttons dari Meta
+//
+// FIX v2:
+//  - Pagination: loop semua halaman Meta API (bukan hanya 100 pertama)
+//  - WHERE fix: pakai COALESCE agar template dengan meta_status NULL juga ter-update
+//  - Orphan detection: template yang sudah tidak ada di Meta di-mark DELETED
 // ─────────────────────────────────────────────────────────────────────────────
 async function syncMetaStatus() {
   const { token, wabaId } = await _getTenantWaCredentials();
@@ -279,36 +281,74 @@ async function syncMetaStatus() {
     return { synced: 0, skipped: 'dev_mode' };
   }
 
-  // Ambil semua template dari Meta termasuk components (untuk meta_buttons)
-  const url = `https://graph.facebook.com/v19.0/${wabaId}/message_templates?fields=id,name,status,quality_rating,components&limit=100`;
-  const resp = await axios.get(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    timeout: 15000,
-  });
+  // ── Fetch semua template dari Meta dengan pagination ──────────────────────
+  let metaTemplates = [];
+  let nextUrl = `https://graph.facebook.com/v19.0/${wabaId}/message_templates?fields=id,name,status,quality_rating,components&limit=100`;
 
-  const metaTemplates = resp.data?.data || [];
+  while (nextUrl) {
+    const resp = await axios.get(nextUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: 15000,
+    });
+    metaTemplates = metaTemplates.concat(resp.data?.data || []);
+    nextUrl = resp.data?.paging?.next || null;
+  }
+
+  // Set nama template yang ada di Meta (untuk deteksi orphan)
+  const metaNameSet = new Set(metaTemplates.map(mt => mt.name.toLowerCase()));
   let synced = 0;
+  let orphaned = 0;
 
+  // ── Update status tiap template yang ditemukan di Meta ───────────────────
   for (const mt of metaTemplates) {
-    // Ekstrak buttons dari components Meta untuk disimpan ke meta_buttons
     const buttonComponents = (mt.components || []).filter(c => c.type === 'BUTTONS');
-    const metaButtons = buttonComponents.length > 0 ? JSON.stringify(buttonComponents[0].buttons || []) : null;
+    const metaButtons = buttonComponents.length > 0
+      ? JSON.stringify(buttonComponents[0].buttons || [])
+      : null;
 
+    // FIX: hapus kondisi (meta_status != 'LOCAL_ONLY') yang skip template ber-meta_status NULL.
+    // Sekarang: update semua template yang cocok template_name_api, kecuali yang LOCAL_ONLY.
     const [result] = await pool.query(
       `UPDATE wa_templates SET
          meta_status            = ?,
-         status_meta            = ?,
          meta_quality_rating    = ?,
          meta_status_updated_at = NOW(),
          meta_buttons           = ?,
          last_updated           = NOW()
-       WHERE template_name_api = ? AND (meta_status != 'LOCAL_ONLY' OR status_meta != 'LOCAL_ONLY')`,
-      [mt.status, mt.status, mt.quality_rating || null, metaButtons, mt.name]
+       WHERE template_name_api = ?
+         AND COALESCE(meta_status, '') != 'LOCAL_ONLY'`,
+      [mt.status, mt.quality_rating || null, metaButtons, mt.name]
     );
     if (result.affectedRows > 0) synced++;
   }
 
-  return { synced, total_from_meta: metaTemplates.length };
+  // ── Orphan detection: template di DB yang tidak ada di Meta ──────────────
+  // Ambil semua template APPROVED/PENDING yang non-DELETED dari DB
+  const [dbRows] = await pool.query(
+    `SELECT id_template, template_name_api FROM wa_templates
+     WHERE status_crm != 'DELETED'
+       AND meta_status IN ('APPROVED', 'PENDING', 'REJECTED')`
+  );
+
+  for (const row of dbRows) {
+    const apiName = (row.template_name_api || '').toLowerCase();
+    if (!metaNameSet.has(apiName)) {
+      // Template ini sudah tidak ada di Meta — update meta_status jadi DELETED
+      await pool.query(
+        `UPDATE wa_templates SET
+           meta_status            = 'DELETED',
+           status_crm             = 'INACTIVE',
+           meta_status_updated_at = NOW(),
+           last_updated           = NOW()
+         WHERE id_template = ?`,
+        [row.id_template]
+      );
+      console.warn(`[Template] Orphan detected & marked DELETED: ${row.id_template} (${row.template_name_api})`);
+      orphaned++;
+    }
+  }
+
+  return { synced, orphaned, total_from_meta: metaTemplates.length };
 }
 
 // ── HELPER: Submit template baru ke Meta ──────────────────────────────────

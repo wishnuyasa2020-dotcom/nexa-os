@@ -461,7 +461,7 @@ async function getTemplateStats() {
           connectTimeout: 5000,
         });
         const [rows] = await conn.query(
-          `SELECT id_template, nama_template, template_name_api, meta_status, status_meta,
+          `SELECT id_template, nama_template, template_name_api, meta_status,
                   status_crm, kategori, pipeline, language_code, last_updated
            FROM wa_templates
            WHERE status_crm != 'DELETED'
@@ -472,7 +472,7 @@ async function getTemplateStats() {
         // Normalise meta_status
         const templates = rows.map(r => ({
           ...r,
-          meta_status: r.meta_status || r.status_meta || 'LOCAL_ONLY',
+          meta_status: r.meta_status || 'LOCAL_ONLY',
         }));
 
         // Aggregate
@@ -530,7 +530,7 @@ async function getTemplatesByTenant(tenantId) {
   return {
     tenantId: t.tenant_id,
     brandName: t.brand_name,
-    data: templates.map(r => ({ ...r, meta_status: r.meta_status || r.status_meta || 'LOCAL_ONLY' })),
+    data: templates.map(r => ({ ...r, meta_status: r.meta_status || 'LOCAL_ONLY' })),
   };
 }
 

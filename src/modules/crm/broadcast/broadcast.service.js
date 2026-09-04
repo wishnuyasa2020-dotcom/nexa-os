@@ -170,8 +170,8 @@ async function getBroadcastHistory(user, query = {}) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/broadcast/templates/meta
-// Tabel: wa_templates (status_meta = 'APPROVED')
-// ─────────────────────────────────────────────────────────────────────────────
+// Tabel: wa_templates (meta_status = 'APPROVED')
+// ───────────────────────────────────────────────────────────────────────────────
 async function getMetaTemplates() {
   const [rows] = await pool.query(
     `SELECT
@@ -182,11 +182,11 @@ async function getMetaTemplates() {
        kategori,
        body_text              AS bodyText,
        parameters,
-       status_meta            AS status,
+       meta_status            AS status,
        meta_quality_rating    AS qualityRating
      FROM wa_templates
-     WHERE status_meta = 'APPROVED'
-       AND status_crm  = 'Aktif'
+     WHERE meta_status = 'APPROVED'
+       AND status_crm  = 'ACTIVE'
      ORDER BY nama_template ASC`
   );
   return rows;
@@ -198,7 +198,7 @@ async function getMetaTemplates() {
 // ─────────────────────────────────────────────────────────────────────────────
 async function getCrmTemplates() {
   // CRM template = row di wa_templates yang pipeline-nya tidak kosong
-  // dan belum submit ke Meta (status_meta NULL / kosong / 'NONE')
+  // dan belum submit ke Meta (meta_status NULL / kosong / 'LOCAL_ONLY')
   const [rows] = await pool.query(
     `SELECT
        id_template            AS id,
@@ -208,8 +208,8 @@ async function getCrmTemplates() {
        pipeline,
        urutan
      FROM wa_templates
-     WHERE status_crm = 'Aktif'
-       AND (status_meta IS NULL OR status_meta = '' OR status_meta NOT IN ('APPROVED','PENDING','REJECTED'))
+     WHERE status_crm = 'ACTIVE'
+       AND (meta_status IS NULL OR meta_status = '' OR meta_status NOT IN ('APPROVED','PENDING','REJECTED'))
      ORDER BY urutan ASC, nama_template ASC`
   );
 
