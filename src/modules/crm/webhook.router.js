@@ -175,6 +175,7 @@ async function handleIncomingMessage(pool, msg, contactMeta, tenantConfig) {
     mediaId  = mediaObj.id        || null;
     mimeType = mediaObj.mime_type || null;
     caption  = mediaObj.caption   || null;
+    body     = caption || mediaObj.filename || '';
   } else if (msgType === 'interactive') {
     const interactive = msg.interactive || {};
     if (interactive.type === 'button_reply') {
