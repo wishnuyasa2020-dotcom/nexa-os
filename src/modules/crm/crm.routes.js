@@ -258,7 +258,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 router.get('/chats', chatCtrl.getConversationList);
 router.post('/chats/initiate', chatCtrl.initiateConversation);
 router.get('/chats/:convId/messages', chatCtrl.getMessages);
-router.post('/chats/:convId/send', upload.single('media'), chatCtrl.sendMessage);
+router.post('/chats/:convId/send', upload.single('file'), chatCtrl.sendMessage);
 router.patch('/chats/:convId/read', chatCtrl.markAsRead);
 
 // ─────────────────────────────────────────────────────────────────────────────
