@@ -252,10 +252,13 @@ router.delete('/weekly/agenda/:agendaId', weeklyCtrl.unscheduleTask);
 // POST /api/v1/chats/:convId/send                 — Kirim pesan (Smart Routing)
 // PATCH /api/v1/chats/:convId/read               — Tandai semua pesan sudah dibaca
 // ─────────────────────────────────────────────────────────────────────────────
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
+
 router.get('/chats', chatCtrl.getConversationList);
 router.post('/chats/initiate', chatCtrl.initiateConversation);
 router.get('/chats/:convId/messages', chatCtrl.getMessages);
-router.post('/chats/:convId/send', chatCtrl.sendMessage);
+router.post('/chats/:convId/send', upload.single('media'), chatCtrl.sendMessage);
 router.patch('/chats/:convId/read', chatCtrl.markAsRead);
 
 // ─────────────────────────────────────────────────────────────────────────────

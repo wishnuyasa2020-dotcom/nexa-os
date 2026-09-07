@@ -20,6 +20,7 @@
 const { pool } = require('../../../config/database');
 
 const axios    = require('axios');
+const FormData = require('form-data');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/chats — Daftar percakapan aktif
@@ -211,10 +212,10 @@ async function getMessages(convId, query = {}) {
 // POST /api/v1/chats/:convId/send — Kirim Pesan (Smart Routing)
 // ─────────────────────────────────────────────────────────────────────────────
 async function sendMessage(convId, payload, user) {
-  const { text, templateId } = payload;
+  const { text, templateId, file, type, latitude, longitude, location_name, location_address } = payload;
 
-  if (!text && !templateId) {
-    throw new Error('Pesan teks atau templateId harus diisi.');
+  if (!text && !templateId && !file && type !== 'location') {
+    throw new Error('Pesan teks, templateId, file media, atau lokasi harus diisi.');
   }
 
   const conn = await pool.getConnection();
@@ -245,6 +246,23 @@ async function sendMessage(convId, payload, user) {
     let finalBody       = text || null;
     let sentAsTemplate  = false;
     let templatePayload = null;
+    let mediaId         = null;
+    let mimeType        = null;
+    let actualType      = type || (templateId ? 'template' : 'text');
+    let locationData    = null;
+
+    if (file) {
+      if (!isSwOpen) throw new Error('Service Window sudah tertutup. Media hanya dapat dikirim saat SW open.');
+      // Upload ke Meta Media API
+      mediaId = await uploadMediaToMeta(file);
+      mimeType = file.mimetype;
+      actualType = file.mimetype.startsWith('video') ? 'video' : 'image';
+      finalBody = finalBody || file.originalname;
+    } else if (actualType === 'location') {
+      if (!isSwOpen) throw new Error('Service Window sudah tertutup. Lokasi hanya dapat dikirim saat SW open.');
+      locationData = { latitude, longitude, name: location_name, address: location_address };
+      finalBody = 'Location shared';
+    }
 
     // 3. SMART ROUTING
     if (templateId) {
@@ -284,7 +302,7 @@ async function sendMessage(convId, payload, user) {
     // 4. Kirim ke Meta WhatsApp Cloud API
     let waMessageId = null;
     try {
-      waMessageId = await sendToMetaApi(phone, finalBody, sentAsTemplate ? templatePayload : null);
+      waMessageId = await sendToMetaApi(phone, finalBody, sentAsTemplate ? templatePayload : null, { mediaId, locationData, type: actualType });
     } catch (metaErr) {
       // Jika Meta gagal — tetap simpan sebagai 'failed', jangan rollback
       console.error('[Chat] Meta API error:', metaErr.message);
@@ -296,14 +314,17 @@ async function sendMessage(convId, payload, user) {
     await conn.query(
       `INSERT INTO chat_messages
          (message_id, conv_id, timestamp, datetime, direction, from_phone, from_name,
-          type, body, status)
-       VALUES (?, ?, ?, NOW(), 'outgoing', 'system', ?, 'text', ?, ?)`,
+          type, body, media_id, mime_type, status)
+       VALUES (?, ?, ?, NOW(), 'outgoing', 'system', ?, ?, ?, ?, ?, ?)`,
       [
         msgIdToInsert,
         convId,
         nowTs,
         user.nama || 'CRO',
+        actualType,
         finalBody,
+        mediaId,
+        mimeType,
         waMessageId ? 'sent' : 'failed',
       ]
     );
@@ -311,12 +332,13 @@ async function sendMessage(convId, payload, user) {
     // 6. Update conversation header
     await conn.query(
       `UPDATE conversations SET
-         last_message_type = 'text',
+         last_message_type = ?,
          last_message_prev = ?,
          last_sender       = ?,
          last_msg_ts       = NOW()
        WHERE conv_id = ?`,
       [
+        actualType,
         (finalBody || '').substring(0, 100),
         user.nama || 'CRO',
         convId,
@@ -378,7 +400,7 @@ function resolveTemplateVariables(bodyText, data = {}) {
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER: Kirim ke Meta WhatsApp Cloud API
 // ─────────────────────────────────────────────────────────────────────────────
-async function sendToMetaApi(toPhone, text, templatePayload = null) {
+async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) {
   const phoneId   = process.env.WA_PHONE_ID;
   const token     = process.env.WA_ACCESS_TOKEN;
 
@@ -407,6 +429,28 @@ async function sendToMetaApi(toPhone, text, templatePayload = null) {
         }] : [],
       },
     };
+  } else if (extra.type === 'image' || extra.type === 'video') {
+    msgBody = {
+      messaging_product: 'whatsapp',
+      to: toPhone,
+      type: extra.type,
+      [extra.type]: { id: extra.mediaId }
+    };
+    if (text && text !== 'undefined' && text !== 'null') {
+      msgBody[extra.type].caption = text;
+    }
+  } else if (extra.type === 'location' && extra.locationData) {
+    msgBody = {
+      messaging_product: 'whatsapp',
+      to: toPhone,
+      type: 'location',
+      location: {
+        latitude: String(extra.locationData.latitude),
+        longitude: String(extra.locationData.longitude),
+        name: extra.locationData.name || '',
+        address: extra.locationData.address || ''
+      }
+    };
   } else {
     // Kirim sebagai teks biasa
     msgBody = {
@@ -426,6 +470,37 @@ async function sendToMetaApi(toPhone, text, templatePayload = null) {
   });
 
   return response.data?.messages?.[0]?.id || null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: Upload Media ke Meta API
+// ─────────────────────────────────────────────────────────────────────────────
+async function uploadMediaToMeta(file) {
+  const phoneId   = process.env.WA_PHONE_ID;
+  const token     = process.env.WA_ACCESS_TOKEN;
+
+  if (!phoneId || !token) {
+    console.warn('[Chat] WA_PHONE_ID / WA_ACCESS_TOKEN belum di-set. Media tidak diupload (dev mode).');
+    return `DEV-MEDIA-${Date.now()}`;
+  }
+
+  const url = `https://graph.facebook.com/v19.0/${phoneId}/media`;
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('file', file.buffer, {
+    filename: file.originalname,
+    contentType: file.mimetype,
+  });
+
+  const response = await axios.post(url, form, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...form.getHeaders(),
+    },
+    timeout: 30000,
+  });
+
+  return response.data?.id;
 }
 
 module.exports = {

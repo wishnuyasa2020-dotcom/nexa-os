@@ -47,7 +47,8 @@ async function getMessages(req, res) {
 // POST /api/v1/chats/:convId/send — Kirim pesan (Smart Routing)
 async function sendMessage(req, res) {
   try {
-    const result = await chatService.sendMessage(req.params.convId, req.body, req.user);
+    const payload = { ...req.body, file: req.file };
+    const result = await chatService.sendMessage(req.params.convId, payload, req.user);
     res.json({ status: 'ok', ...result });
   } catch (err) {
     console.error('[Chat] sendMessage:', err.message);
