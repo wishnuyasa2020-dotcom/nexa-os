@@ -76,6 +76,34 @@ async function testConnection() {
     const conn2 = await pool.getConnection();
     console.log('✅ Default Tenant DB connected to:', process.env.DB_NAME);
     conn2.release();
+    
+    // Auto Migrate reaction column for all tenants
+    try {
+      const [rows] = await mainPool.query('SELECT * FROM tenant_databases');
+      for (const config of rows) {
+        const tPool = getDynamicPool({
+          host: config.db_host,
+          port: 3306,
+          user: config.db_user,
+          password: config.db_password,
+          database: config.db_name
+        });
+        try {
+          // Attempt to add column, ignore if exists
+          await tPool.query('ALTER TABLE chat_messages ADD COLUMN reaction VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;');
+          console.log(`✅ Auto-Migrate: Added reaction column to ${config.db_name}`);
+        } catch (e) {
+          if (e.code === 'ER_DUP_FIELDNAME') {
+             try {
+                await tPool.query('ALTER TABLE chat_messages MODIFY reaction VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;');
+             } catch(e2) {}
+          }
+        }
+      }
+    } catch(err) {
+       console.log('Migrate warning:', err.message);
+    }
+
   } catch (err) {
     console.error('❌ MySQL connection failed:', err.message);
     process.exit(1);
