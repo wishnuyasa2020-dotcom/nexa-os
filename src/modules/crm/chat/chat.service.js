@@ -23,6 +23,7 @@ const axios    = require('axios');
 const FormData = require('form-data');
 const fs       = require('fs');
 const path     = require('path');
+const os       = require('os');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/chats — Daftar percakapan aktif
@@ -504,9 +505,9 @@ async function uploadMediaToMeta(file) {
 
   const mediaId = response.data?.id;
 
-  if (mediaId) {
+  if (mediaId && file && file.buffer) {
     try {
-      const uploadDir = path.join(process.cwd(), 'uploads/media');
+      const uploadDir = path.join(os.tmpdir(), 'nexa-media');
       if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
       fs.writeFileSync(path.join(uploadDir, mediaId), file.buffer);
     } catch (fsErr) {
@@ -542,9 +543,9 @@ async function getMedia(mediaId, res) {
     mediaStream.data.pipe(res);
   } catch (err) {
     // Jika gagal ambil dari Meta (biasanya krn outgoing message tdk bisa di-download via API)
-    // Coba baca dari folder lokal
+    // Coba baca dari folder lokal (tmp)
     try {
-      const uploadDir = path.join(process.cwd(), 'uploads/media');
+      const uploadDir = path.join(os.tmpdir(), 'nexa-media');
       const localPath = path.join(uploadDir, mediaId);
       if (fs.existsSync(localPath)) {
         const [[msg]] = await pool.query('SELECT mime_type FROM chat_messages WHERE media_id = ? LIMIT 1', [mediaId]);
