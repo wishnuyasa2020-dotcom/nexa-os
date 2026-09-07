@@ -215,10 +215,10 @@ async function getMessages(convId, query = {}) {
 // POST /api/v1/chats/:convId/send — Kirim Pesan (Smart Routing)
 // ─────────────────────────────────────────────────────────────────────────────
 async function sendMessage(convId, payload, user) {
-  const { text, templateId, file, type, latitude, longitude, location_name, location_address } = payload;
+  const { text, templateId, file, type, latitude, longitude, location_name, location_address, targetMessageId, emoji } = payload;
 
-  if (!text && !templateId && !file && type !== 'location') {
-    throw new Error('Pesan teks, templateId, file media, atau lokasi harus diisi.');
+  if (!text && !templateId && !file && type !== 'location' && type !== 'reaction') {
+    throw new Error('Pesan teks, templateId, file media, lokasi, atau reaction harus diisi.');
   }
 
   const conn = await pool.getConnection();
@@ -267,6 +267,21 @@ async function sendMessage(convId, payload, user) {
         actualType = 'document';
       }
       finalBody = finalBody || file.originalname;
+    } else if (type === 'reaction') {
+      if (!isSwOpen) throw new Error('Service Window sudah tertutup. Reaction hanya dapat dikirim saat SW open.');
+      if (!targetMessageId) throw new Error('Target message ID dibutuhkan untuk mengirim reaction.');
+      
+      // Kirim reaction ke Meta
+      await sendToMetaApi(phone, null, null, { type: 'reaction', targetMessageId, emoji: emoji || '' });
+      
+      // Update db lokal
+      await conn.query('UPDATE chat_messages SET reaction = ? WHERE message_id = ?', [emoji || null, targetMessageId]);
+      
+      // Update last_msg_ts di conversation
+      await conn.query('UPDATE conversations SET last_msg_ts = NOW() WHERE conv_id = ?', [convId]);
+      
+      await conn.commit();
+      return { success: true, sentAs: 'reaction' };
     } else if (actualType === 'location') {
       if (!isSwOpen) throw new Error('Service Window sudah tertutup. Lokasi hanya dapat dikirim saat SW open.');
       locationData = { latitude, longitude, name: location_name, address: location_address };
@@ -461,6 +476,17 @@ async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) 
         longitude: String(extra.locationData.longitude),
         name: extra.locationData.name || '',
         address: extra.locationData.address || ''
+      }
+    };
+  } else if (extra.type === 'reaction') {
+    msgBody = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: toPhone,
+      type: 'reaction',
+      reaction: {
+        message_id: extra.targetMessageId,
+        emoji: extra.emoji
       }
     };
   } else {

@@ -163,6 +163,22 @@ async function handleIncomingMessage(pool, msg, contactMeta, tenantConfig) {
   const msgType       = msg.type || 'text';
   const timestamp     = msg.timestamp ? new Date(parseInt(msg.timestamp) * 1000) : new Date();
 
+  if (msgType === 'reaction') {
+    const targetMsgId = msg.reaction?.message_id;
+    const emoji = msg.reaction?.emoji || null;
+    if (targetMsgId) {
+      const conn = await pool.getConnection();
+      try {
+        await conn.query('UPDATE chat_messages SET reaction = ? WHERE message_id = ?', [emoji, targetMsgId]);
+      } catch (err) {
+        console.error('[Webhook] Error update reaction:', err.message);
+      } finally {
+        conn.release();
+      }
+    }
+    return; // Selesai memproses reaction
+  }
+
   let body     = null;
   let mediaId  = null;
   let mimeType = null;
