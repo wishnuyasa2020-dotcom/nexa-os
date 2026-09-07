@@ -21,6 +21,8 @@ const { pool } = require('../../../config/database');
 
 const axios    = require('axios');
 const FormData = require('form-data');
+const fs       = require('fs');
+const path     = require('path');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/chats — Daftar percakapan aktif
@@ -500,7 +502,19 @@ async function uploadMediaToMeta(file) {
     timeout: 30000,
   });
 
-  return response.data?.id;
+  const mediaId = response.data?.id;
+
+  if (mediaId) {
+    try {
+      const uploadDir = path.join(process.cwd(), 'uploads/media');
+      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+      fs.writeFileSync(path.join(uploadDir, mediaId), file.buffer);
+    } catch (fsErr) {
+      console.error('[Chat] Gagal menyimpan media lokal:', fsErr.message);
+    }
+  }
+
+  return mediaId;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -527,6 +541,21 @@ async function getMedia(mediaId, res) {
     res.setHeader('Content-Type', mimeType);
     mediaStream.data.pipe(res);
   } catch (err) {
+    // Jika gagal ambil dari Meta (biasanya krn outgoing message tdk bisa di-download via API)
+    // Coba baca dari folder lokal
+    try {
+      const uploadDir = path.join(process.cwd(), 'uploads/media');
+      const localPath = path.join(uploadDir, mediaId);
+      if (fs.existsSync(localPath)) {
+        const [[msg]] = await pool.query('SELECT mime_type FROM chat_messages WHERE media_id = ? LIMIT 1', [mediaId]);
+        res.setHeader('Content-Type', msg?.mime_type || 'image/jpeg');
+        fs.createReadStream(localPath).pipe(res);
+        return;
+      }
+    } catch (localErr) {
+      console.error('[Chat] Local media fallback error:', localErr.message);
+    }
+
     throw new Error('Gagal mengambil media dari Meta: ' + err.message);
   }
 }
