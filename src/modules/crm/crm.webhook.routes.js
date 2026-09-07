@@ -177,6 +177,7 @@ async function handleIncomingMessage(msg, contactMeta) {
     mediaId  = mediaObj.id   || null;
     mimeType = mediaObj.mime_type || null;
     caption  = mediaObj.caption  || null;
+    body     = caption || mediaObj.filename || '';
   }
 
   const fromName = contactMeta?.profile?.name || fromPhone;
