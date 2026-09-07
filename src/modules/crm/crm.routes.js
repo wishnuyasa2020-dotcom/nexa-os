@@ -260,6 +260,7 @@ router.post('/chats/initiate', chatCtrl.initiateConversation);
 router.get('/chats/:convId/messages', chatCtrl.getMessages);
 router.post('/chats/:convId/send', upload.single('file'), chatCtrl.sendMessage);
 router.patch('/chats/:convId/read', chatCtrl.markAsRead);
+router.get('/chats/media/:mediaId', chatCtrl.getMedia);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WEB PUSH SUBSCRIPTION

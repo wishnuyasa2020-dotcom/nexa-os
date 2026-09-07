@@ -75,5 +75,14 @@ async function markAsRead(req, res) {
     res.status(500).json({ status: 'error', message: err.message });
   }
 }
+// GET /api/v1/chats/media/:mediaId — Ambil media dari Meta
+async function getMedia(req, res) {
+  try {
+    await chatService.getMedia(req.params.mediaId, res);
+  } catch (err) {
+    console.error('[Chat] getMedia:', err.message);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
 
-module.exports = { getConversationList, initiateConversation, getMessages, sendMessage, markAsRead };
+module.exports = { getConversationList, initiateConversation, getMessages, sendMessage, markAsRead, getMedia };

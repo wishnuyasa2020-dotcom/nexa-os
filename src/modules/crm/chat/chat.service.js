@@ -503,10 +503,39 @@ async function uploadMediaToMeta(file) {
   return response.data?.id;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/chats/media/:mediaId — Fetch Media dari Meta
+// ─────────────────────────────────────────────────────────────────────────────
+async function getMedia(mediaId, res) {
+  const token = process.env.WA_ACCESS_TOKEN;
+  if (!token) throw new Error('WA_ACCESS_TOKEN tidak dikonfigurasi.');
+
+  try {
+    // 1. Ambil URL media
+    const urlRes = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const mediaUrl = urlRes.data.url;
+    const mimeType = urlRes.data.mime_type;
+
+    // 2. Stream data media
+    const mediaStream = await axios.get(mediaUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+      responseType: 'stream'
+    });
+
+    res.setHeader('Content-Type', mimeType);
+    mediaStream.data.pipe(res);
+  } catch (err) {
+    throw new Error('Gagal mengambil media dari Meta: ' + err.message);
+  }
+}
+
 module.exports = {
   getConversationList,
   initiateConversation,
   getMessages,
   sendMessage,
   isServiceWindowOpen,
+  getMedia,
 };
