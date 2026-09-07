@@ -259,7 +259,13 @@ async function sendMessage(convId, payload, user) {
       // Upload ke Meta Media API
       mediaId = await uploadMediaToMeta(file);
       mimeType = file.mimetype;
-      actualType = file.mimetype.startsWith('video') ? 'video' : 'image';
+      if (file.mimetype.startsWith('video/')) {
+        actualType = 'video';
+      } else if (file.mimetype.startsWith('image/')) {
+        actualType = 'image';
+      } else {
+        actualType = 'document';
+      }
       finalBody = finalBody || file.originalname;
     } else if (actualType === 'location') {
       if (!isSwOpen) throw new Error('Service Window sudah tertutup. Lokasi hanya dapat dikirim saat SW open.');
@@ -305,7 +311,7 @@ async function sendMessage(convId, payload, user) {
     // 4. Kirim ke Meta WhatsApp Cloud API
     let waMessageId = null;
     try {
-      waMessageId = await sendToMetaApi(phone, finalBody, sentAsTemplate ? templatePayload : null, { mediaId, locationData, type: actualType });
+      waMessageId = await sendToMetaApi(phone, finalBody, sentAsTemplate ? templatePayload : null, { mediaId, locationData, type: actualType, filename: file?.originalname });
     } catch (metaErr) {
       // Jika Meta gagal — tetap simpan sebagai 'failed', jangan rollback
       console.error('[Chat] Meta API error:', metaErr.message);
@@ -432,13 +438,16 @@ async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) 
         }] : [],
       },
     };
-  } else if (extra.type === 'image' || extra.type === 'video') {
+  } else if (extra.type === 'image' || extra.type === 'video' || extra.type === 'document') {
     msgBody = {
       messaging_product: 'whatsapp',
       to: toPhone,
       type: extra.type,
       [extra.type]: { id: extra.mediaId }
     };
+    if (extra.type === 'document' && extra.filename) {
+      msgBody.document.filename = extra.filename;
+    }
     if (text && text !== 'undefined' && text !== 'null') {
       msgBody[extra.type].caption = text;
     }
