@@ -181,6 +181,9 @@ async function getMetaTemplates() {
        language_code          AS language,
        kategori,
        body_text              AS bodyText,
+       header_type,
+       header_url,
+       header_filename,
        parameters,
        meta_status            AS status,
        meta_quality_rating    AS qualityRating
