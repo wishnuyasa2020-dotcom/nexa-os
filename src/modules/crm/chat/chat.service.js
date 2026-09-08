@@ -325,6 +325,7 @@ async function sendMessage(convId, payload, user) {
 
     // 4. Kirim ke Meta WhatsApp Cloud API
     let waMessageId = null;
+    let metaErrorDetails = null;
     try {
       waMessageId = await sendToMetaApi(phone, finalBody, sentAsTemplate ? templatePayload : null, { 
         mediaId, 
@@ -335,7 +336,8 @@ async function sendMessage(convId, payload, user) {
       });
     } catch (metaErr) {
       // Jika Meta gagal — tetap simpan sebagai 'failed', jangan rollback
-      console.error('[Chat] Meta API error:', metaErr.message);
+      metaErrorDetails = metaErr.response?.data ? JSON.stringify(metaErr.response.data) : metaErr.message;
+      console.error('[Chat] Meta API error:', metaErrorDetails);
     }
 
     // 5. Simpan pesan ke DB
@@ -344,8 +346,8 @@ async function sendMessage(convId, payload, user) {
     await conn.query(
       `INSERT INTO chat_messages
          (message_id, conv_id, timestamp, datetime, direction, from_phone, from_name,
-          type, body, media_id, mime_type, status)
-       VALUES (?, ?, ?, NOW(), 'outgoing', 'system', ?, ?, ?, ?, ?, ?)`,
+          type, body, media_id, mime_type, status, caption)
+       VALUES (?, ?, ?, NOW(), 'outgoing', 'system', ?, ?, ?, ?, ?, ?, ?)`,
       [
         msgIdToInsert,
         convId,
@@ -356,6 +358,7 @@ async function sendMessage(convId, payload, user) {
         mediaId,
         mimeType,
         waMessageId ? 'sent' : 'failed',
+        metaErrorDetails
       ]
     );
 
@@ -582,13 +585,42 @@ async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) 
     };
   }
 
-  const response = await axios.post(url, msgBody, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    timeout: 10000,
-  });
+  let response;
+  try {
+    response = await axios.post(url, msgBody, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 10000,
+    });
+  } catch (err) {
+    // WORKAROUND: Jika Meta menolak Interactive Button (misal karena batasan format/id),
+    // kita secara transparan mengubahnya menjadi pesan teks biasa dengan list angka.
+    if (msgBody.type === 'interactive' && msgBody.interactive?.type === 'button') {
+      console.warn('[Chat] Meta menolak pesan interaktif. Menggunakan workaround (fallback text list)...');
+      let fallbackText = msgBody.interactive.body.text + '\n\n*Silakan balas dengan mengetikkan angka:*';
+      
+      const btns = msgBody.interactive.action?.buttons || [];
+      btns.forEach((b, i) => {
+        fallbackText += `\n${i + 1}. ${b.reply.title}`;
+      });
+
+      const fallbackMsgBody = {
+        messaging_product: 'whatsapp',
+        to: toPhone,
+        type: 'text',
+        text: { body: fallbackText },
+      };
+
+      response = await axios.post(url, fallbackMsgBody, {
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        timeout: 10000,
+      });
+    } else {
+      throw err;
+    }
+  }
 
   return response.data?.messages?.[0]?.id || null;
 }
