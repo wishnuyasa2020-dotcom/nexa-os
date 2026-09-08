@@ -249,6 +249,7 @@ async function sendMessage(convId, payload, user) {
     let finalBody       = text || null;
     let sentAsTemplate  = false;
     let templatePayload = null;
+    let tmplRecord      = null;
     let mediaId         = null;
     let mimeType        = null;
     let actualType      = type || (templateId ? 'template' : 'text');
@@ -296,6 +297,7 @@ async function sendMessage(convId, payload, user) {
       );
 
       if (!tmpl) throw new Error('Template tidak ditemukan atau tidak aktif.');
+      tmplRecord = tmpl;
 
       // Resolve variabel template dengan data siswa
       finalBody = resolveTemplateVariables(tmpl.body_text, {
@@ -332,7 +334,7 @@ async function sendMessage(convId, payload, user) {
         locationData, 
         type: actualType, 
         filename: file?.originalname,
-        freeTemplate: !sentAsTemplate && templateId ? tmpl : null
+        freeTemplate: !sentAsTemplate && templateId ? tmplRecord : null
       });
     } catch (metaErr) {
       // Jika Meta gagal — tetap simpan sebagai 'failed', jangan rollback
