@@ -195,12 +195,15 @@ async function handleIncomingMessage(pool, msg, contactMeta, tenantConfig) {
   } else if (msgType === 'interactive') {
     const interactive = msg.interactive || {};
     if (interactive.type === 'button_reply') {
-      body = interactive.button_reply?.title || '';
+      body = interactive.button_reply?.title || interactive.button_reply?.id || '';
     } else if (interactive.type === 'list_reply') {
-      body = interactive.list_reply?.title || '';
+      body = interactive.list_reply?.title || interactive.list_reply?.id || '';
+    } else {
+      // Fallback jika format beda
+      body = interactive.button_reply?.title || interactive.list_reply?.title || JSON.stringify(interactive);
     }
   } else if (msgType === 'button') {
-    body = msg.button?.text || '';
+    body = msg.button?.text || msg.button?.payload || '';
   }
 
   const fromName    = contactMeta?.profile?.name || fromPhone;

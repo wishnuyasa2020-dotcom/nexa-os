@@ -300,7 +300,7 @@ async function sendMessage(convId, payload, user) {
       tmplRecord = tmpl;
 
       // Resolve variabel template dengan data siswa
-      finalBody = resolveTemplateVariables(tmpl.body_text, {
+      finalBody = resolveTemplateVariables(tmplRecord, {
         student_name: conv.student_name,
         phone,
       });
@@ -423,12 +423,34 @@ function isServiceWindowOpen(lastIncomingTs) {
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER: Resolve placeholder {{1}}, {{2}} pada body_text template
 // ─────────────────────────────────────────────────────────────────────────────
-function resolveTemplateVariables(bodyText, data = {}) {
-  const vars = [
-    data.student_name || '',
-    data.phone        || '',
-    data.school_name  || '',
-  ];
+function resolveTemplateVariables(tmpl, data = {}) {
+  let bodyText = typeof tmpl === 'string' ? tmpl : (tmpl.body_text || '');
+  let vars = [];
+  
+  // Jika ini object template dan punya parameters, petakan berdasarkan parameters.body
+  if (typeof tmpl === 'object' && tmpl.parameters) {
+    try {
+      const parsedParams = typeof tmpl.parameters === 'string' ? JSON.parse(tmpl.parameters) : tmpl.parameters;
+      if (parsedParams.body && Array.isArray(parsedParams.body)) {
+        vars = parsedParams.body.map(paramName => {
+          if (paramName === 'STUDENT_NAME') return data.student_name || '';
+          if (paramName === 'PHONE_NUMBER') return data.phone || '';
+          if (paramName === 'SCHOOL_NAME') return data.school_name || 'Sekolah';
+          return '';
+        });
+      }
+    } catch (e) {}
+  }
+  
+  // Fallback (legacy hardcoded) jika vars masih kosong
+  if (vars.length === 0) {
+    vars = [
+      data.student_name || '',
+      data.phone        || '',
+      data.school_name  || 'Sekolah',
+    ];
+  }
+  
   return bodyText.replace(/\{\{(\d+)\}\}/g, (_, idx) => vars[parseInt(idx) - 1] || '');
 }
 
