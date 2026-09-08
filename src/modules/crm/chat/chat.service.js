@@ -326,7 +326,13 @@ async function sendMessage(convId, payload, user) {
     // 4. Kirim ke Meta WhatsApp Cloud API
     let waMessageId = null;
     try {
-      waMessageId = await sendToMetaApi(phone, finalBody, sentAsTemplate ? templatePayload : null, { mediaId, locationData, type: actualType, filename: file?.originalname });
+      waMessageId = await sendToMetaApi(phone, finalBody, sentAsTemplate ? templatePayload : null, { 
+        mediaId, 
+        locationData, 
+        type: actualType, 
+        filename: file?.originalname,
+        freeTemplate: !sentAsTemplate && templateId ? tmpl : null
+      });
     } catch (metaErr) {
       // Jika Meta gagal — tetap simpan sebagai 'failed', jangan rollback
       console.error('[Chat] Meta API error:', metaErr.message);
@@ -453,6 +459,68 @@ async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) 
         }] : [],
       },
     };
+  } else if (extra.freeTemplate) {
+    // Kirim simulasi template gratis (Interactive / Media / Text)
+    const tmpl = extra.freeTemplate;
+    const headerType = (tmpl.header_type || 'none').toLowerCase();
+    const headerUrl = tmpl.header_url || null;
+    const headerText = tmpl.header_filename || null;
+    
+    let buttons = [];
+    try { buttons = JSON.parse(tmpl.meta_buttons || '[]'); } catch (e) {}
+
+    let bodyText = text || '';
+    const quickReplies = buttons.filter(b => b.type === 'QUICK_REPLY').slice(0, 3);
+    const otherButtons = buttons.filter(b => b.type !== 'QUICK_REPLY');
+
+    // Sisipkan URL/Phone ke body text karena tombol interaktif biasa tidak support ini
+    if (otherButtons.length > 0) {
+      bodyText += '\n\n';
+      otherButtons.forEach(b => {
+        if (b.type === 'URL') bodyText += `🔗 ${b.text}: ${b.url}\n`;
+        else if (b.type === 'PHONE_NUMBER') bodyText += `📞 ${b.text}: ${b.phone_number}\n`;
+      });
+      bodyText = bodyText.trimEnd();
+    }
+
+    if (quickReplies.length > 0) {
+      msgBody = {
+        messaging_product: 'whatsapp',
+        to: toPhone,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: bodyText },
+          action: {
+            buttons: quickReplies.map((b, i) => ({
+              type: 'reply',
+              reply: { id: `btn_${i}`, title: b.text.substring(0, 20) }
+            }))
+          }
+        }
+      };
+      if (headerType === 'image' || headerType === 'video' || headerType === 'document') {
+         if (headerUrl) msgBody.interactive.header = { type: headerType, [headerType]: { link: headerUrl } };
+      } else if (headerType === 'text' && headerText) {
+         msgBody.interactive.header = { type: 'text', text: headerText.substring(0, 60) };
+      }
+    } else {
+      if (headerType === 'image' || headerType === 'video' || headerType === 'document') {
+         if (headerUrl) {
+           msgBody = {
+             messaging_product: 'whatsapp',
+             to: toPhone,
+             type: headerType,
+             [headerType]: { link: headerUrl, caption: bodyText }
+           };
+         } else {
+           msgBody = { messaging_product: 'whatsapp', to: toPhone, type: 'text', text: { body: bodyText } };
+         }
+      } else {
+         if (headerType === 'text' && headerText) bodyText = `*${headerText}*\n\n${bodyText}`;
+         msgBody = { messaging_product: 'whatsapp', to: toPhone, type: 'text', text: { body: bodyText } };
+      }
+    }
   } else if (extra.type === 'image' || extra.type === 'video' || extra.type === 'document') {
     msgBody = {
       messaging_product: 'whatsapp',
