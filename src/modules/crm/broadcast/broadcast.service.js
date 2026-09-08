@@ -184,6 +184,7 @@ async function getMetaTemplates() {
        header_type,
        header_url,
        header_filename,
+       meta_buttons,
        parameters,
        meta_status            AS status,
        meta_quality_rating    AS qualityRating

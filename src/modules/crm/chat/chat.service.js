@@ -500,13 +500,15 @@ async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) 
         }
       };
       if (headerType === 'image' || headerType === 'video' || headerType === 'document') {
-         if (headerUrl) msgBody.interactive.header = { type: headerType, [headerType]: { link: headerUrl } };
+         if (headerUrl && (headerUrl.startsWith('http://') || headerUrl.startsWith('https://'))) {
+            msgBody.interactive.header = { type: headerType, [headerType]: { link: headerUrl } };
+         }
       } else if (headerType === 'text' && headerText) {
          msgBody.interactive.header = { type: 'text', text: headerText.substring(0, 60) };
       }
     } else {
       if (headerType === 'image' || headerType === 'video' || headerType === 'document') {
-         if (headerUrl) {
+         if (headerUrl && (headerUrl.startsWith('http://') || headerUrl.startsWith('https://'))) {
            msgBody = {
              messaging_product: 'whatsapp',
              to: toPhone,
@@ -514,6 +516,7 @@ async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) 
              [headerType]: { link: headerUrl, caption: bodyText }
            };
          } else {
+           // Fallback to text if URL is relative or missing (Meta rejects relative URLs)
            msgBody = { messaging_product: 'whatsapp', to: toPhone, type: 'text', text: { body: bodyText } };
          }
       } else {
