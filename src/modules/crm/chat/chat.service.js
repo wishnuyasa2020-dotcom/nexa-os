@@ -471,8 +471,9 @@ async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) 
       buttons = JSON.parse(tmpl.meta_buttons || '[]'); 
       if (buttons.length === 0 && tmpl.parameters) {
           const parsedParams = typeof tmpl.parameters === 'string' ? JSON.parse(tmpl.parameters) : tmpl.parameters;
-          if (parsedParams && parsedParams.buttons) {
-              buttons = parsedParams.buttons.map((b) => ({
+          const rawButtons = parsedParams.buttons || parsedParams.meta_buttons;
+          if (rawButtons) {
+              buttons = rawButtons.map((b) => ({
                   type: b.type,
                   text: b.label || b.text
               }));
