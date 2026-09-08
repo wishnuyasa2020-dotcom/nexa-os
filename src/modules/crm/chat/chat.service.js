@@ -467,7 +467,18 @@ async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) 
     const headerText = tmpl.header_filename || null;
     
     let buttons = [];
-    try { buttons = JSON.parse(tmpl.meta_buttons || '[]'); } catch (e) {}
+    try { 
+      buttons = JSON.parse(tmpl.meta_buttons || '[]'); 
+      if (buttons.length === 0 && tmpl.parameters) {
+          const parsedParams = typeof tmpl.parameters === 'string' ? JSON.parse(tmpl.parameters) : tmpl.parameters;
+          if (parsedParams && parsedParams.buttons) {
+              buttons = parsedParams.buttons.map((b) => ({
+                  type: b.type,
+                  text: b.label || b.text
+              }));
+          }
+      }
+    } catch (e) {}
 
     let bodyText = text || '';
     const quickReplies = buttons.filter(b => b.type === 'QUICK_REPLY').slice(0, 3);
