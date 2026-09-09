@@ -402,9 +402,18 @@ function initBroadcastWorker() {
         
         await tenantStorage.run(tenant.tenant_id, async () => {
           try {
+            let phoneId = tenant.whatsapp_phone_id;
+            let token   = tenant.whatsapp_access_token;
+            
+            // Prioritaskan .env untuk legacy tenant (derma-indonesia) agar sama dengan chat.service.js
+            if (tenant.tenant_id === 'derma-indonesia' || !phoneId || !token) {
+               phoneId = process.env.WA_PHONE_ID || process.env.WA_PHONE_NUMBER_ID || phoneId;
+               token   = process.env.WA_ACCESS_TOKEN || token;
+            }
+
             const credentials = {
-              phoneId: tenant.whatsapp_phone_id,
-              token: tenant.whatsapp_access_token
+              phoneId: phoneId,
+              token: token
             };
             const result = await processBroadcastQueue(credentials);
             if (result.processed > 0) {
