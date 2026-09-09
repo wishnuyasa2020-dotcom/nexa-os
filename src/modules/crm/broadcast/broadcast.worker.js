@@ -215,31 +215,8 @@ async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageC
     timeout: META_TIMEOUT 
   };
 
-  try {
-    const res = await axios.post(url, payload, config);
-    return { wamid: res.data?.messages?.[0]?.id, bodyText: finalBody };
-  } catch (err) {
-    // FALLBACK BERLAPIS: Jika format Interactive ditolak Meta, paksa ubah jadi Text + Numbered List!
-    if (payload.type === 'interactive' && payload.interactive?.type === 'button') {
-      console.warn(`[Broadcast Worker] Meta menolak pesan interaktif untuk ${toPhone}. Menggunakan workaround text list...`);
-      
-      let fallbackText = payload.interactive.body.text + '\n\n*Silakan balas dengan mengetikkan angka:*';
-      payload.interactive.action.buttons.forEach((btn, idx) => {
-        fallbackText += `\n${idx + 1}. ${btn.reply.title}`;
-      });
-
-      const fallbackPayload = {
-        messaging_product: 'whatsapp',
-        to: toPhone,
-        type: 'text',
-        text: { body: fallbackText },
-      };
-
-      const resFallback = await axios.post(url, fallbackPayload, config);
-      return { wamid: resFallback.data?.messages?.[0]?.id || null, bodyText: fallbackText };
-    }
-    throw err;
-  }
+  const res = await axios.post(url, payload, config);
+  return { wamid: res.data?.messages?.[0]?.id, bodyText: finalBody, type: payload.type };
 }
 
 // ── Main Worker: proses 1 batch dari broadcast_queue (per tenant) ──────────
@@ -296,7 +273,7 @@ async function processBroadcastQueue(credentials) {
       processed++;
 
       try {
-        const { wamid, bodyText: sentBodyText } = await _sendToMeta({
+        const { wamid, bodyText: sentBodyText, type: sentType } = await _sendToMeta({
           phoneId,
           token,
           toPhone:         row.wa_number,
@@ -346,22 +323,23 @@ async function processBroadcastQueue(credentials) {
         // 2. Insert pesan ke chat_messages
         const msgIdToInsert = wamid || `SYS-${Date.now()}`;
         const finalMsgBody = sentBodyText || (row.template_name_api ? row.wt_body_text : row.body_text) || row.body_text || '';
+        const finalMsgType = sentType || 'text';
         await pool.query(
           `INSERT INTO chat_messages
              (message_id, conv_id, timestamp, datetime, direction, from_phone, from_name, type, body, status)
-           VALUES (?, ?, ?, NOW(), 'outgoing', 'system', 'System Broadcast', 'text', ?, 'sent')`,
-          [msgIdToInsert, convId, Math.floor(Date.now() / 1000), finalMsgBody]
+           VALUES (?, ?, ?, NOW(), 'outgoing', 'system', 'System Broadcast', ?, ?, 'sent')`,
+          [msgIdToInsert, convId, Math.floor(Date.now() / 1000), finalMsgType, finalMsgBody]
         );
 
         // 3. Update conversation header
         await pool.query(
           `UPDATE conversations SET
-             last_message_type = 'text',
+             last_message_type = ?,
              last_message_prev = ?,
              last_sender       = 'System Broadcast',
              last_msg_ts       = NOW()
            WHERE conv_id = ?`,
-          [finalMsgBody.substring(0, 100), convId]
+          [finalMsgType, finalMsgBody.substring(0, 100), convId]
         );
         // ------------------------------
 
