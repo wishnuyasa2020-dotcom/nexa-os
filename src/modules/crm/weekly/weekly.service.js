@@ -79,75 +79,86 @@ async function getBacklog(user, query = {}) {
   const search = query.search?.trim() ? `%${query.search.trim()}%` : null;
 
   // Backlog condition per tabel (tidak boleh hilang meski punya due_date selama belum masuk board)
-  const blAS  = `(IFNULL(status_jadwal,'') NOT IN ('dijadwalkan', 'Tidak ada jadwal', 'Selesai', 'Batal'))`;
-  const blASI = `(IFNULL(status_jadwal,'') NOT IN ('dijadwalkan', 'Tidak ada jadwal', 'Selesai', 'Batal'))`;
-  const blHV  = `(IFNULL(status_jadwal,'') NOT IN ('dijadwalkan', 'Tidak ada jadwal', 'Selesai', 'Batal'))`;
+  const blAS  = `(IFNULL(as_t.status_jadwal,'') NOT IN ('dijadwalkan', 'Tidak ada jadwal', 'Selesai', 'Batal'))`;
+  const blASI = `(IFNULL(asi_t.status_jadwal,'') NOT IN ('dijadwalkan', 'Tidak ada jadwal', 'Selesai', 'Batal'))`;
+  const blHV  = `(IFNULL(hv_t.status_jadwal,'') NOT IN ('dijadwalkan', 'Tidak ada jadwal', 'Selesai', 'Batal'))`;
   const blAE  = `(IFNULL(status_aktivitas,'') NOT IN ('dijadwalkan', 'Selesai', 'Batal'))`;
 
   // ── aktivitas_sekolah ──────────────────────────────────────────────────────
   const asParams = [mp];
-  const asWhere  = ['marketing_period = ?', blAS];
-  if (isCRO)  { asWhere.push('pic = ?');                asParams.push(user.nama);  }
-  if (search) { asWhere.push('id_sekolah_nama LIKE ?'); asParams.push(search);     }
+  const asWhere  = ['as_t.marketing_period = ?', blAS];
+  if (isCRO)  { asWhere.push('sp.pj_sekolah = ?');              asParams.push(user.nama);  }
+  if (search) { asWhere.push('as_t.id_sekolah_nama LIKE ?');    asParams.push(search);     }
 
   const [asRows] = await pool.query(`
     SELECT
-      CONCAT('as:', id)   AS taskId,
-      'sekolah'           AS jenis,
-      id_sekolah_nama     AS judul,
-      next_action,
-      status_terkini      AS status,
-      pic                 AS owner,
-      marketing_period,
-      DATE_FORMAT(due_date, '%Y-%m-%d') AS date_val
-    FROM aktivitas_sekolah
+      CONCAT('as:', as_t.id) AS taskId,
+      'sekolah'              AS jenis,
+      as_t.id_sekolah_nama   AS judul,
+      as_t.next_action,
+      as_t.status_terkini    AS status,
+      sp.pj_sekolah          AS owner,
+      as_t.marketing_period,
+      DATE_FORMAT(as_t.due_date, '%Y-%m-%d') AS date_val
+    FROM aktivitas_sekolah as_t
+    LEFT JOIN sekolah_periode sp 
+      ON as_t.id_sekolah_nama LIKE CONCAT(sp.id_sekolah, '-%') 
+      AND sp.marketing_period = as_t.marketing_period
     WHERE ${asWhere.join(' AND ')}
-    ORDER BY timestamp DESC
+    ORDER BY as_t.timestamp DESC
     LIMIT 150
   `, asParams);
 
   // ── aktivitas_siswa ────────────────────────────────────────────────────────
   const asiParams = [mp];
-  const asiWhere  = ['marketing_period = ?', blASI];
+  const asiWhere  = ['asi_t.marketing_period = ?', blASI];
+  if (isCRO)  { asiWhere.push('sp.cro = ?'); asiParams.push(user.nama); }
   if (search) {
-    asiWhere.push('(id_siswa_nama LIKE ? OR id_sekolah_nama LIKE ?)');
+    asiWhere.push('(asi_t.id_siswa_nama LIKE ? OR asi_t.id_sekolah_nama LIKE ?)');
     asiParams.push(search, search);
   }
 
   const [asiRows] = await pool.query(`
     SELECT
-      CONCAT('asi:', id)  AS taskId,
-      'siswa'             AS jenis,
-      id_siswa_nama       AS judul,
-      next_action,
-      status_terkini      AS status,
-      NULL                AS owner,
-      marketing_period,
-      DATE_FORMAT(due_date, '%Y-%m-%d') AS date_val
-    FROM aktivitas_siswa
+      CONCAT('asi:', asi_t.id) AS taskId,
+      'siswa'                  AS jenis,
+      asi_t.id_siswa_nama      AS judul,
+      asi_t.next_action,
+      asi_t.status_terkini     AS status,
+      sp.cro                   AS owner,
+      asi_t.marketing_period,
+      DATE_FORMAT(asi_t.due_date, '%Y-%m-%d') AS date_val
+    FROM aktivitas_siswa asi_t
+    LEFT JOIN siswa_periode sp 
+      ON asi_t.id_siswa_nama LIKE CONCAT(sp.id_siswa, '-%') 
+      AND sp.marketing_period = asi_t.marketing_period
     WHERE ${asiWhere.join(' AND ')}
-    ORDER BY timestamp DESC
+    ORDER BY asi_t.timestamp DESC
     LIMIT 150
   `, asiParams);
 
   // ── home_visit ─────────────────────────────────────────────────────────────
   const hvParams = [mp];
-  const hvWhere  = ['marketing_period = ?', blHV];
-  if (search) { hvWhere.push('id_siswa_nama LIKE ?'); hvParams.push(search); }
+  const hvWhere  = ['hv_t.marketing_period = ?', blHV];
+  if (isCRO)  { hvWhere.push('sp.cro = ?'); hvParams.push(user.nama); }
+  if (search) { hvWhere.push('hv_t.id_siswa_nama LIKE ?'); hvParams.push(search); }
 
   const [hvRows] = await pool.query(`
     SELECT
-      CONCAT('hv:', id)   AS taskId,
-      'home_visit'        AS jenis,
-      id_siswa_nama       AS judul,
-      next_action,
-      status_terkini      AS status,
-      NULL                AS owner,
-      marketing_period,
-      DATE_FORMAT(due_date, '%Y-%m-%d') AS date_val
-    FROM home_visit
+      CONCAT('hv:', hv_t.id) AS taskId,
+      'home_visit'           AS jenis,
+      hv_t.id_siswa_nama     AS judul,
+      hv_t.next_action,
+      hv_t.status_terkini    AS status,
+      sp.cro                 AS owner,
+      hv_t.marketing_period,
+      DATE_FORMAT(hv_t.due_date, '%Y-%m-%d') AS date_val
+    FROM home_visit hv_t
+    LEFT JOIN siswa_periode sp 
+      ON hv_t.id_siswa_nama LIKE CONCAT(sp.id_siswa, '-%') 
+      AND sp.marketing_period = hv_t.marketing_period
     WHERE ${hvWhere.join(' AND ')}
-    ORDER BY timestamp DESC
+    ORDER BY hv_t.timestamp DESC
     LIMIT 100
   `, hvParams);
 

@@ -17,8 +17,14 @@ router.post('/forgot-password', ctrl.forgotPassword);
 // POST /api/crm/auth/reset-password — public
 router.post('/reset-password', ctrl.resetPassword);
 
-// GET  /api/crm/auth/me      ← butuh token
+// GET  /api/crm/auth/me      ← butuh token (lama)
 router.get('/me', requireAuth, ctrl.me);
+
+// GET /api/v1/auth/profile   ← Profile Detail (baru)
+router.get('/profile', requireAuth, ctrl.getProfile);
+
+// PUT /api/v1/auth/profile/change-password
+router.put('/profile/change-password', requireAuth, ctrl.changePassword);
 
 // GET /api/crm/auth/debug-token  ← SEMENTARA, untuk debug token issues
 router.get('/debug-token', (req, res) => {

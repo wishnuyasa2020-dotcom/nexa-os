@@ -324,4 +324,33 @@ async function resetPassword(token, newPassword) {
   return { success: true, message: 'Password berhasil diubah. Silakan login kembali.' };
 }
 
-module.exports = { login, verifyJWT, forgotPassword, resetPassword };
+async function getProfile(username) {
+  const [[user]] = await pool.query(
+    'SELECT username, nama, role, email, foto_url, created_at FROM users WHERE username = ? LIMIT 1',
+    [username]
+  );
+  return user || null;
+}
+
+async function changePassword(username, oldPassword, newPassword) {
+  const [[user]] = await pool.query(
+    'SELECT id, password, salt FROM users WHERE username = ? LIMIT 1',
+    [username]
+  );
+  if (!user) return { success: false, message: 'User tidak ditemukan.' };
+
+  const isOldValid = _hashSHA256(oldPassword, user.salt || '') === user.password;
+  if (!isOldValid) return { success: false, message: 'Password lama tidak sesuai.' };
+
+  const newSalt = _generateSalt();
+  const newHash = _hashSHA256(newPassword, newSalt);
+
+  await pool.query(
+    'UPDATE users SET password = ?, salt = ? WHERE id = ?',
+    [newHash, newSalt, user.id]
+  );
+
+  return { success: true, message: 'Password berhasil diubah.' };
+}
+
+module.exports = { login, verifyJWT, forgotPassword, resetPassword, getProfile, changePassword };

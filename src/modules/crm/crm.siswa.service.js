@@ -15,10 +15,7 @@ async function _checkSiswaLimits(requiredCount = 1) {
   let tenantId = tenantStorage.getStore();
   
   if (!tenantId) {
-    const dbName = process.env.DB_NAME;
-    const [dbRows] = await mainPool.query("SELECT tenant_id FROM tenant_databases WHERE db_name = ?", [dbName]);
-    if (dbRows.length === 0) return { tenantId: null }; 
-    tenantId = dbRows[0].tenant_id;
+    throw new Error("Gagal: Konteks Tenant tidak ditemukan. Akses diblokir demi keamanan data (Data Spillage Protection).");
   }
 
   // 2. Get limits from tenants

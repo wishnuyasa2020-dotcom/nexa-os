@@ -52,4 +52,37 @@ async function resetPassword(req, res) {
   }
 }
 
-module.exports = { login, me, forgotPassword, resetPassword };
+async function getProfile(req, res) {
+  try {
+    const data = await authService.getProfile(req.user.username);
+    if (!data) return res.status(404).json({ status: 'error', message: 'User tidak ditemukan.' });
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+async function changePassword(req, res) {
+  try {
+    const { old_password, new_password, confirm_password } = req.body;
+    if (!old_password || !new_password || !confirm_password) {
+      return res.status(400).json({ status: 'error', message: 'Semua field password wajib diisi.' });
+    }
+    if (new_password.length < 6) {
+      return res.status(400).json({ status: 'error', message: 'Password baru minimal 6 karakter.' });
+    }
+    if (new_password !== confirm_password) {
+      return res.status(400).json({ status: 'error', message: 'Konfirmasi password tidak cocok.' });
+    }
+
+    const result = await authService.changePassword(req.user.username, old_password, new_password);
+    if (!result.success) {
+      return res.status(400).json({ status: 'error', message: result.message });
+    }
+    res.json({ status: 'ok', message: result.message });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+module.exports = { login, me, forgotPassword, resetPassword, getProfile, changePassword };

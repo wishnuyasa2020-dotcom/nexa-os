@@ -367,9 +367,22 @@ async function getDashboardSummary(user, marketingPeriodArg, monthFilter = 'All'
     let tenantIdForQuota = tenantStorage.getStore();
     
     if (!tenantIdForQuota) {
-      const dbName = process.env.DB_NAME;
-      const [dbRows] = await mainPool.query("SELECT tenant_id FROM tenant_databases WHERE db_name = ?", [dbName]);
-      if (dbRows.length > 0) tenantIdForQuota = dbRows[0].tenant_id;
+      console.warn('[Quota] tenantStorage.getStore() is empty. Cannot fetch tenant quota safely.');
+      // return empty stats fallback
+      return {
+        stats: {
+          totalSekolah, sekolahTersosialisasi, totalSiswa, calonProspek, prospekAktif, konsultasi, siapDaftar, totalTerdaftar: terdaftar
+        },
+        konversi: {
+          sekolah: totalSekolah, sudahSosialisasi: sekolahTersosialisasi, pctSosialisasi: totalSekolah > 0 ? Math.round((sekolahTersosialisasi / totalSekolah) * 100) : 0,
+          dataSiswa: totalSiswa, calonProspek, pctCalonProspek: totalSiswa > 0 ? Math.round((calonProspek / totalSiswa) * 100) : 0,
+          prospekAktif, pctProspek: calonProspek > 0 ? Math.round((prospekAktif / calonProspek) * 100) : 0,
+          konsultasi, pctKonsultasi: prospekAktif > 0 ? Math.round((konsultasi / prospekAktif) * 100) : 0,
+          siapDaftar, pctSiapDaftar: konsultasi > 0 ? Math.round((siapDaftar / konsultasi) * 100) : 0,
+          terdaftar, pctTerdaftar: siapDaftar > 0 ? Math.round((terdaftar / siapDaftar) * 100) : 0
+        },
+        quota
+      };
     }
 
     if (tenantIdForQuota) {

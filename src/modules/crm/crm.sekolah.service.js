@@ -32,10 +32,7 @@ async function _checkSekolahLimits(requiredCount = 1) {
   let tenantId = tenantStorage.getStore();
   
   if (!tenantId) {
-    const dbName = process.env.DB_NAME;
-    const [dbRows] = await mainPool.query("SELECT tenant_id FROM tenant_databases WHERE db_name = ?", [dbName]);
-    if (dbRows.length === 0) return { tenantId: null }; 
-    tenantId = dbRows[0].tenant_id;
+    throw new Error("Gagal: Konteks Tenant tidak ditemukan. Akses diblokir demi keamanan data (Data Spillage Protection).");
   }
 
   const [tenantRows] = await mainPool.query("SELECT limit_sekolah, used_sekolah FROM tenants WHERE tenant_id = ?", [tenantId]);
@@ -212,8 +209,9 @@ async function detailSekolah(id, user, query = {}) {
       IFNULL(ms.kecamatan, '')                               AS kecamatan,
       IFNULL(ms.alamat, '')                                  AS alamat,
       IFNULL(ms.status_sekolah, 'Belum Diketahui')           AS statusAktif,
-      IFNULL(ms.pic_utama, '')                               AS picNama,
-      IFNULL(ms.wa_pic, '')                                  AS picWa,
+      IFNULL(ps.nama, ms.pic_utama)                          AS picNama,
+      IFNULL(ps.no_wa, ms.wa_pic)                            AS picWa,
+      IFNULL(ps.bsuid, '')                                   AS bsuid,
       IFNULL(sp.pj_sekolah, '')                              AS pjCro,
       IFNULL(sp.jumlah_siswa, 0)                             AS jumlahSiswaKelas12,
       IFNULL(sp.status_terkini, '')                          AS status,
@@ -226,6 +224,7 @@ async function detailSekolah(id, user, query = {}) {
       IFNULL(DATEDIFF(CURDATE(), sp.status_updated_date), 0) AS aging
     FROM sekolah_periode sp
     LEFT JOIN master_sekolah ms ON sp.id_sekolah = ms.id_sekolah
+    LEFT JOIN pic_sekolah ps ON sp.id_sekolah = ps.id_sekolah
     WHERE sp.marketing_period = ? AND sp.id_sekolah = ?
     LIMIT 1
   `, [mp, id]);
@@ -237,9 +236,9 @@ async function detailSekolah(id, user, query = {}) {
     aging:              parseInt(row.aging, 10) || 0,
     jumlahSiswaKelas12: parseInt(row.jumlahSiswaKelas12, 10) || 0,
     dueDate:            row.dueDate || null,
-    pic:                row.picNama ? { nama: row.picNama, jabatan: '', noWa: row.picWa } : null,
+    pic:                (row.picNama || row.bsuid) ? { nama: row.picNama, jabatan: '', noWa: row.picWa, bsuid: row.bsuid } : null,
   };
-  delete s.picNama; delete s.picWa;
+  delete s.picNama; delete s.picWa; delete s.bsuid;
 
   // ── Riwayat aktivitas ──────────────────────────────────────────
   // NOTE: aktivitas_sekolah uses 'pic' not 'pic_yang_dihubungi'
@@ -349,6 +348,11 @@ async function tambahSekolah(data, user) {
   );
 
   await pool.query(
+    `INSERT INTO pic_sekolah (id_sekolah, nama, jabatan, no_wa, bsuid) VALUES (?, '', '', NULL, NULL)`,
+    [newId]
+  );
+
+  await pool.query(
     `INSERT INTO sekolah_periode
        (id_record, marketing_period, id_sekolah, pj_sekolah, status_terkini, status_updated_date,
         next_action, due_date, status_jadwal, sekolah_aktif, jumlah_siswa, created_date, last_updated)
@@ -390,10 +394,22 @@ async function editSekolah(id, data, user) {
   if (data.kecamatan    !== undefined) { msClauses.push('kecamatan = ?');      msParams.push(data.kecamatan); }
   if (data.alamat       !== undefined) { msClauses.push('alamat = ?');         msParams.push(data.alamat); }
   if (data.statusAktif  !== undefined) { msClauses.push('status_sekolah = ?'); msParams.push(data.statusAktif); }
-  if (data.picNama      !== undefined) { msClauses.push('pic_utama = ?');      msParams.push(data.picNama); }
-  if (data.picWa        !== undefined) { msClauses.push('wa_pic = ?');         msParams.push(cleanPhone(data.picWa)); }
   msParams.push(id);
   await pool.query(`UPDATE master_sekolah SET ${msClauses.join(', ')} WHERE id_sekolah = ?`, msParams);
+
+  // Update pic_sekolah
+  const psUpdates = [];
+  const psParams = [];
+  if (data.picNama !== undefined) { psUpdates.push('nama = ?'); psParams.push(data.picNama); }
+  if (data.picWa !== undefined) { psUpdates.push('no_wa = ?'); psParams.push(cleanPhone(data.picWa)); }
+  if (psUpdates.length > 0) {
+    const fields = psUpdates.map(u => u.split(' =')[0]);
+    await pool.query(
+      `INSERT INTO pic_sekolah (id_sekolah, ${fields.join(', ')}) VALUES (?, ${fields.map(()=>'?').join(', ')})
+       ON DUPLICATE KEY UPDATE ${psUpdates.join(', ')}`,
+      [id, ...psParams, ...psParams]
+    );
+  }
 
   // Update sekolah_periode (jumlah_siswa, sekolah_aktif)
   const spClauses = ['last_updated = ?'];
@@ -587,16 +603,30 @@ async function inputAktivitas(sekolahId, data, user) {
     updParams
   );
 
-  // Update master_sekolah: PIC + alamat (saat Visit Awal)
+  // Update master_sekolah: alamat (saat Visit Awal)
   const msClauses = ['last_updated = ?'];
   const msParams  = [now];
-  if (data.namaPic)        { msClauses.push('pic_utama = ?');      msParams.push(data.namaPic); }
-  if (data.noWaPic)        { msClauses.push('wa_pic = ?');         msParams.push(cleanPhone(data.noWaPic)); }
   if (data.statusAktif)    { msClauses.push('status_sekolah = ?'); msParams.push(data.statusAktif); }
   if (data.alamatLengkap)  { msClauses.push('alamat = ?');         msParams.push(data.alamatLengkap); }
   if (msClauses.length > 1) {
     msParams.push(sekolahId);
     await pool.query(`UPDATE master_sekolah SET ${msClauses.join(', ')} WHERE id_sekolah = ?`, msParams);
+  }
+
+  // Update pic_sekolah
+  const psUpdates = [];
+  const psParams = [];
+  if (data.namaPic) { psUpdates.push('nama = ?'); psParams.push(data.namaPic); }
+  if (data.noWaPic) { psUpdates.push('no_wa = ?'); psParams.push(cleanPhone(data.noWaPic)); }
+  if (data.jabatanPic) { psUpdates.push('jabatan = ?'); psParams.push(data.jabatanPic); }
+
+  if (psUpdates.length > 0) {
+    const fields = psUpdates.map(u => u.split(' =')[0]);
+    await pool.query(
+      `INSERT INTO pic_sekolah (id_sekolah, ${fields.join(', ')}) VALUES (?, ${fields.map(()=>'?').join(', ')})
+       ON DUPLICATE KEY UPDATE ${psUpdates.join(', ')}`,
+      [sekolahId, ...psParams, ...psParams]
+    );
   }
 
   // Sync to Google Calendar

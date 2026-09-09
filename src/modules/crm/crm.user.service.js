@@ -21,10 +21,12 @@ async function _checkRoleLimits(role, requiredCount = 1) {
   // Visitor mungkin tidak ada limit (atau tidak didefinisikan di tier-feature).
   if (!['admin', 'manager', 'chief cro', 'cro'].includes(normalizedRole)) return;
 
-  const dbName = process.env.DB_NAME;
-  const [dbRows] = await mainPool.query("SELECT tenant_id FROM tenant_databases WHERE db_name = ?", [dbName]);
-  if (dbRows.length === 0) return;
-  const tenantId = dbRows[0].tenant_id;
+  const { tenantStorage } = require('../../config/database');
+  const tenantId = tenantStorage.getStore();
+  
+  if (!tenantId) {
+    throw new Error("Gagal: Konteks Tenant tidak ditemukan. Akses diblokir demi keamanan data (Data Spillage Protection).");
+  }
 
   const [tenantRows] = await mainPool.query("SELECT max_admin, max_manager, max_chief_cro, max_cro, addon_cro FROM tenants WHERE tenant_id = ?", [tenantId]);
   if (tenantRows.length === 0) return;
