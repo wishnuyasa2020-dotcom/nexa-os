@@ -72,12 +72,13 @@ async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageC
   }
 
   let payload;
+  let finalBody = '';
 
   // Jika SW open, kirim sebagai interactive/text (Smart Routing) untuk menghemat biaya Template Meta
   if (isSwOpen) {
     // Substitusi variabel manual
     // Prioritaskan body dari template asli (wtBodyText) jika ini template Meta, fallback ke bq.body_text
-    let finalBody = (templateNameApi ? wtBodyText : bodyText) || '';
+    finalBody = (templateNameApi ? wtBodyText : bodyText) || '';
     if (parameters) {
       let parsedParams = [];
       try {
