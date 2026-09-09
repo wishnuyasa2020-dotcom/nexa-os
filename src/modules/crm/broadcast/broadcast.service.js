@@ -300,7 +300,7 @@ async function createBroadcastJob(user, body = {}) {
          ELSE 0
        END              AS isSwOpen
      FROM master_siswa ms
-     LEFT JOIN wa_service_window sw ON sw.id_siswa = ms.id_siswa
+     LEFT JOIN wa_service_window sw ON (sw.id_siswa = ms.id_siswa OR sw.phone = ms.wa)
      WHERE ms.id_siswa IN (${placeholders})`,
     targetIds
   );
