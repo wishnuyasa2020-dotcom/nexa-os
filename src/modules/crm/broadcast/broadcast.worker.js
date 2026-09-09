@@ -65,7 +65,7 @@ async function _getCredentials(tenantId) {
 }
 
 // ── Helper: kirim 1 pesan ke Meta WA Cloud API ───────────────────────────────
-async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageCode, parameters, isSwOpen, bodyText }) {
+async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageCode, parameters, isSwOpen, bodyText, wtBodyText, headerType, headerUrl, headerFilename, metaButtons }) {
   if (!phoneId || !token) {
     console.warn('[Broadcast Worker] Credentials belum di-set. Pesan tidak dikirim (dev mode).');
     return { wamid: `DEV-${Date.now()}`, dev: true };
@@ -73,10 +73,11 @@ async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageC
 
   let payload;
 
-  // Jika SW open dan tidak ada template_name_api (berarti ini LOCAL_ONLY), kirim sebagai text biasa.
-  if (isSwOpen && !templateNameApi) {
-    // Substitusi variabel manual jika ada
-    let finalBody = bodyText || '';
+  // Jika SW open, kirim sebagai interactive/text (Smart Routing) untuk menghemat biaya Template Meta
+  if (isSwOpen) {
+    // Substitusi variabel manual
+    // Prioritaskan body dari template asli (wtBodyText) jika ini template Meta, fallback ke bq.body_text
+    let finalBody = (templateNameApi ? wtBodyText : bodyText) || '';
     if (parameters) {
       let parsedParams = [];
       try {
@@ -90,16 +91,82 @@ async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageC
       });
     }
 
-    payload = {
-      messaging_product: 'whatsapp',
-      to: toPhone,
-      type: 'text',
-      text: {
-        body: finalBody
+    // Ekstrak Header
+    const hType = (headerType || 'none').toLowerCase();
+    const hUrl  = headerUrl || null;
+    const hText = headerFilename || null;
+
+    // Ekstrak Buttons
+    let buttons = [];
+    try { 
+      buttons = JSON.parse(metaButtons || '[]'); 
+      if (buttons.length === 0 && parameters) {
+          const parsedParams = typeof parameters === 'string' ? JSON.parse(parameters) : parameters;
+          const rawButtons = parsedParams.buttons || parsedParams.meta_buttons;
+          if (rawButtons) {
+              buttons = rawButtons.map((b) => ({
+                  type: b.type,
+                  text: b.label || b.text
+              }));
+          }
       }
-    };
+    } catch (e) {}
+
+    const quickReplies = buttons.filter(b => b.type === 'QUICK_REPLY').slice(0, 3);
+    const otherButtons = buttons.filter(b => b.type !== 'QUICK_REPLY');
+
+    // Sisipkan URL/Phone ke body text karena tombol interaktif biasa tidak support ini
+    if (otherButtons.length > 0) {
+      finalBody += '\n\n';
+      otherButtons.forEach(b => {
+        if (b.type === 'URL') finalBody += `🔗 ${b.text}: ${b.url}\n`;
+        else if (b.type === 'PHONE_NUMBER') finalBody += `📞 ${b.text}: ${b.phone_number}\n`;
+      });
+      finalBody = finalBody.trimEnd();
+    }
+
+    if (quickReplies.length > 0) {
+      payload = {
+        messaging_product: 'whatsapp',
+        to: toPhone,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: finalBody },
+          action: {
+            buttons: quickReplies.map((b, i) => ({
+              type: 'reply',
+              reply: { id: `btn_${i}`, title: b.text.substring(0, 20) }
+            }))
+          }
+        }
+      };
+      if (hType === 'image' || hType === 'video' || hType === 'document') {
+         if (hUrl && (hUrl.startsWith('http://') || hUrl.startsWith('https://'))) {
+            payload.interactive.header = { type: hType, [hType]: { link: hUrl } };
+         }
+      } else if (hType === 'text' && hText) {
+         payload.interactive.header = { type: 'text', text: hText.substring(0, 60) };
+      }
+    } else {
+      if (hType === 'image' || hType === 'video' || hType === 'document') {
+         if (hUrl && (hUrl.startsWith('http://') || hUrl.startsWith('https://'))) {
+           payload = {
+             messaging_product: 'whatsapp',
+             to: toPhone,
+             type: hType,
+             [hType]: { link: hUrl, caption: finalBody }
+           };
+         } else {
+           payload = { messaging_product: 'whatsapp', to: toPhone, type: 'text', text: { body: finalBody } };
+         }
+      } else {
+         if (hType === 'text' && hText) finalBody = `*${hText}*\n\n${finalBody}`;
+         payload = { messaging_product: 'whatsapp', to: toPhone, type: 'text', text: { body: finalBody } };
+      }
+    }
   } else {
-    // SW closed ATAU (SW open tapi template APPROVED) -> Kirim via Template API
+    // SW closed -> WAJIB Kirim via Template API
     let parsedParams = [];
     if (parameters) {
       try {
@@ -130,19 +197,49 @@ async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageC
     };
   }
 
-  const resp = await axios.post(
-    `https://graph.facebook.com/${META_API_VER}/${phoneId}/messages`,
-    payload,
-    {
-      headers: {
-        Authorization:  `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: META_TIMEOUT,
-    }
-  );
+  try {
+    const resp = await axios.post(
+      `https://graph.facebook.com/${META_API_VER}/${phoneId}/messages`,
+      payload,
+      {
+        headers: {
+          Authorization:  `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: META_TIMEOUT,
+      }
+    );
+    return { wamid: resp.data?.messages?.[0]?.id || null };
+  } catch (err) {
+    // FALLBACK BERLAPIS: Jika format Interactive ditolak Meta, paksa ubah jadi Text + Numbered List!
+    if (payload.type === 'interactive' && payload.interactive?.type === 'button') {
+      console.warn(`[Broadcast Worker] Meta menolak pesan interaktif untuk ${toPhone}. Menggunakan workaround text list...`);
+      let fallbackText = payload.interactive.body.text + '\n\n*Silakan balas dengan mengetikkan angka:*';
+      
+      const btns = payload.interactive.action?.buttons || [];
+      btns.forEach((b, i) => {
+        fallbackText += `\n${i + 1}. ${b.reply.title}`;
+      });
 
-  return { wamid: resp.data?.messages?.[0]?.id || null };
+      const fallbackPayload = {
+        messaging_product: 'whatsapp',
+        to: toPhone,
+        type: 'text',
+        text: { body: fallbackText },
+      };
+
+      const respFallback = await axios.post(
+        `https://graph.facebook.com/${META_API_VER}/${phoneId}/messages`,
+        fallbackPayload,
+        {
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          timeout: META_TIMEOUT,
+        }
+      );
+      return { wamid: respFallback.data?.messages?.[0]?.id || null };
+    }
+    throw err;
+  }
 }
 
 // ── Main Worker: proses 1 batch dari broadcast_queue (per tenant) ──────────
@@ -165,6 +262,11 @@ async function processBroadcastQueue(credentials) {
          bq.language_code,
          bq.is_sw_open,
          bq.body_text,
+         wt.body_text AS wt_body_text,
+         wt.header_type,
+         wt.header_url,
+         wt.header_filename,
+         wt.meta_buttons,
          wt.parameters
        FROM broadcast_queue bq
        LEFT JOIN wa_templates wt ON wt.template_name_api = bq.template_name_api
@@ -199,6 +301,11 @@ async function processBroadcastQueue(credentials) {
           parameters:      row.parameters,
           isSwOpen:        row.is_sw_open,
           bodyText:        row.body_text,
+          wtBodyText:      row.wt_body_text,
+          headerType:      row.header_type,
+          headerUrl:       row.header_url,
+          headerFilename:  row.header_filename,
+          metaButtons:     row.meta_buttons
         });
 
         // Update status → terkirim
