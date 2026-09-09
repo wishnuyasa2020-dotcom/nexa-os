@@ -65,7 +65,7 @@ async function _getCredentials(tenantId) {
 }
 
 // ── Helper: kirim 1 pesan ke Meta WA Cloud API ───────────────────────────────
-async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageCode, parameters, isSwOpen, bodyText, wtBodyText, headerType, headerUrl, headerFilename, metaButtons }) {
+async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageCode, parameters, isSwOpen, bodyText, wtBodyText, headerType, headerUrl, headerFilename, metaButtons, namaSiswa, namaSekolah }) {
   if (!phoneId || !token) {
     console.warn('[Broadcast Worker] Credentials belum di-set. Pesan tidak dikirim (dev mode).');
     return { wamid: `DEV-${Date.now()}`, dev: true };
@@ -86,7 +86,17 @@ async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageC
       } catch {
         parsedParams = [];
       }
-      parsedParams.forEach((val, i) => {
+      
+      const resolvedParams = parsedParams.map(paramKey => {
+         switch (paramKey) {
+           case 'STUDENT_NAME': return namaSiswa || 'Siswa';
+           case 'PHONE_NUMBER': return toPhone || '';
+           case 'SCHOOL_NAME':  return namaSekolah || 'Sekolah';
+           default: return paramKey;
+         }
+      });
+
+      resolvedParams.forEach((val, i) => {
         finalBody = finalBody.split(`{{${i + 1}}}`).join(String(val));
       });
     }
@@ -195,30 +205,27 @@ async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageC
         components,
       },
     };
+    finalBody = templateNameApi;
   }
 
+  console.log(`[Broadcast Worker] 🚀 Mengirim ke ${toPhone} (SW: ${isSwOpen ? 'OPEN' : 'CLOSED'})`, payload.type);
+  const url = `https://graph.facebook.com/${META_API_VER}/${phoneId}/messages`;
+  const config = { 
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    timeout: META_TIMEOUT 
+  };
+
   try {
-    const resp = await axios.post(
-      `https://graph.facebook.com/${META_API_VER}/${phoneId}/messages`,
-      payload,
-      {
-        headers: {
-          Authorization:  `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: META_TIMEOUT,
-      }
-    );
-    return { wamid: resp.data?.messages?.[0]?.id || null };
+    const res = await axios.post(url, payload, config);
+    return { wamid: res.data?.messages?.[0]?.id, bodyText: finalBody };
   } catch (err) {
     // FALLBACK BERLAPIS: Jika format Interactive ditolak Meta, paksa ubah jadi Text + Numbered List!
     if (payload.type === 'interactive' && payload.interactive?.type === 'button') {
       console.warn(`[Broadcast Worker] Meta menolak pesan interaktif untuk ${toPhone}. Menggunakan workaround text list...`);
-      let fallbackText = payload.interactive.body.text + '\n\n*Silakan balas dengan mengetikkan angka:*';
       
-      const btns = payload.interactive.action?.buttons || [];
-      btns.forEach((b, i) => {
-        fallbackText += `\n${i + 1}. ${b.reply.title}`;
+      let fallbackText = payload.interactive.body.text + '\n\n*Silakan balas dengan mengetikkan angka:*';
+      payload.interactive.action.buttons.forEach((btn, idx) => {
+        fallbackText += `\n${idx + 1}. ${btn.reply.title}`;
       });
 
       const fallbackPayload = {
@@ -228,15 +235,8 @@ async function _sendToMeta({ phoneId, token, toPhone, templateNameApi, languageC
         text: { body: fallbackText },
       };
 
-      const respFallback = await axios.post(
-        `https://graph.facebook.com/${META_API_VER}/${phoneId}/messages`,
-        fallbackPayload,
-        {
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          timeout: META_TIMEOUT,
-        }
-      );
-      return { wamid: respFallback.data?.messages?.[0]?.id || null };
+      const resFallback = await axios.post(url, fallbackPayload, config);
+      return { wamid: resFallback.data?.messages?.[0]?.id || null, bodyText: fallbackText };
     }
     throw err;
   }
@@ -267,9 +267,13 @@ async function processBroadcastQueue(credentials) {
          wt.header_url,
          wt.header_filename,
          wt.meta_buttons,
-         wt.parameters
+         wt.parameters,
+         bq.nama_siswa,
+         msek.nama_sekolah
        FROM broadcast_queue bq
        LEFT JOIN wa_templates wt ON wt.template_name_api = bq.template_name_api
+       LEFT JOIN master_siswa ms ON ms.id_siswa = bq.id_siswa
+       LEFT JOIN master_sekolah msek ON msek.id_sekolah = ms.id_sekolah
        WHERE bq.status = 'antri'
        LIMIT ?
        FOR UPDATE SKIP LOCKED`,
@@ -292,7 +296,7 @@ async function processBroadcastQueue(credentials) {
       processed++;
 
       try {
-        const { wamid } = await _sendToMeta({
+        const { wamid, bodyText: sentBodyText } = await _sendToMeta({
           phoneId,
           token,
           toPhone:         row.wa_number,
@@ -305,7 +309,9 @@ async function processBroadcastQueue(credentials) {
           headerType:      row.header_type,
           headerUrl:       row.header_url,
           headerFilename:  row.header_filename,
-          metaButtons:     row.meta_buttons
+          metaButtons:     row.meta_buttons,
+          namaSiswa:       row.nama_siswa,
+          namaSekolah:     row.nama_sekolah
         });
 
         // Update status → terkirim
@@ -315,6 +321,49 @@ async function processBroadcastQueue(credentials) {
            WHERE id_queue = ?`,
           [wamid, row.id_queue]
         );
+
+        // --- ROOMCHAT INTEGRATION ---
+        // 1. Cek apakah percakapan sudah ada untuk id_siswa ini
+        const [[existingConv]] = await pool.query(
+          'SELECT conv_id FROM conversations WHERE id_siswa = ? LIMIT 1',
+          [row.id_siswa]
+        );
+
+        let convId;
+        if (existingConv) {
+          convId = existingConv.conv_id;
+        } else {
+          // Buat percakapan baru jika belum ada
+          const { v4: uuidv4 } = require('uuid');
+          convId = uuidv4();
+          await pool.query(
+            `INSERT INTO conversations (conv_id, id_siswa, wa_number, student_name, created_by, status, window_status, created_at, last_msg_ts)
+             VALUES (?, ?, ?, ?, 'System Broadcast', 'active', 'CLOSED', NOW(), NOW())`,
+            [convId, row.id_siswa, row.wa_number, row.nama_siswa || 'Siswa']
+          );
+        }
+
+        // 2. Insert pesan ke chat_messages
+        const msgIdToInsert = wamid || `SYS-${Date.now()}`;
+        const finalMsgBody = sentBodyText || (row.template_name_api ? row.wt_body_text : row.body_text) || row.body_text || '';
+        await pool.query(
+          `INSERT INTO chat_messages
+             (message_id, conv_id, timestamp, datetime, direction, from_phone, from_name, type, body, status)
+           VALUES (?, ?, ?, NOW(), 'outgoing', 'system', 'System Broadcast', 'text', ?, 'sent')`,
+          [msgIdToInsert, convId, Math.floor(Date.now() / 1000), finalMsgBody]
+        );
+
+        // 3. Update conversation header
+        await pool.query(
+          `UPDATE conversations SET
+             last_message_type = 'text',
+             last_message_prev = ?,
+             last_sender       = 'System Broadcast',
+             last_msg_ts       = NOW()
+           WHERE conv_id = ?`,
+          [finalMsgBody.substring(0, 100), convId]
+        );
+        // ------------------------------
 
         // Update counter broadcast header
         await pool.query(
