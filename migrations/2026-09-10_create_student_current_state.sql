@@ -1,4 +1,4 @@
-﻿-- ============================================================
+-- ============================================================
 -- Migration: Create student_current_state (Read-Model Projection)
 -- Tujuan: Menggantikan JOIN berat ke siswa_periode untuk filter
 --         Silo Inbox CRO pada Modul Live Chat.
@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS student_current_state (
   PRIMARY KEY (id_siswa),
   INDEX idx_cro_assignee (cro_assignee),
   INDEX idx_pipeline_state (pipeline_state)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Read-Model Projection snapshot status siswa per CRO';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Read-Model Projection snapshot status siswa per CRO';
 
 -- Populate awal dari siswa_periode
 INSERT INTO student_current_state (id_siswa, nama_siswa, cro_assignee, pipeline_state, status_label, marketing_period, updated_at)
