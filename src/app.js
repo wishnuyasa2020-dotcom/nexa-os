@@ -63,16 +63,16 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/crm/auth', authRoutes);         // ← backward-compat
 
-// CRM routes: tersedia di dua prefix (v1 baru + crm lama)
-app.use('/api/v1', crmRoutes);
-app.use('/api/crm', crmRoutes);               // ← backward-compat
-
-// SaaS routes (Public Self-Registration & Pool Status)
+// SaaS routes (Public Self-Registration & Pool Status) — dipasang SEBELUM crmRoutes agar tidak terkena requireAuth
 app.use('/api/v1/saas', saasRoutes);
 
 // Public routes (No JWT required)
 app.use('/api/public', publicRoutes);
 app.use('/public', publicRoutes);
+
+// CRM routes: tersedia di dua prefix (v1 baru + crm lama)
+app.use('/api/v1', crmRoutes);
+app.use('/api/crm', crmRoutes);               // ← backward-compat
 
 // Webhook routes — Legacy single-tenant (backward-compat)
 app.use('/api/webhook', webhookRoutes);
