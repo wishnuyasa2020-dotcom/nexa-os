@@ -111,7 +111,7 @@ const INTERACTION_OUTCOME_MAP = {
   'Sosialisasi Selesai':                   { status: 'Sudah Sosialisasi',         nextAction: 'Input Data Siswa',       isTerminal: false, isDowngrade: false, requiresAlasan: false, requiresTanggalSos: false, autoH1: true },
 
   // ── Outcomes terminal
-  'Data Siswa Terinput':                   { status: 'Lead Captured',             nextAction: null,                     isTerminal: true,  isDowngrade: false, requiresAlasan: false, requiresTanggalSos: false },
+  'Data Siswa Terinput':                   { status: 'Identity Captured',         nextAction: null,                     isTerminal: true,  isDowngrade: false, requiresAlasan: false, requiresTanggalSos: false },
   'Ditolak Final':                         { status: 'Tidak Bisa Sosialisasi',    nextAction: null,                     isTerminal: true,  isDowngrade: false, requiresAlasan: true,  requiresTanggalSos: false },
   'Tutup / Merger':                        { status: 'Nonaktif / Tutup / Merger', nextAction: null,                     isTerminal: true,  isDowngrade: false, requiresAlasan: false, requiresTanggalSos: false },
 };
@@ -128,7 +128,7 @@ const HASIL_AKTIVITAS_SEKOLAH = {
   'Jadwal Sosialisasi Dibatalkan':    { status: 'Tunggu Jadwal Sosialisasi', nextAction: 'Jadwalkan Sosialisasi', isDowngrade: true },
   'PIC Berganti — Perlu Visit Ulang': { status: 'Tunggu Visit Ulang',        nextAction: 'Visit Ulang', isDowngrade: true },
   'Sosialisasi Selesai':              { status: 'Sudah Sosialisasi',         nextAction: 'Input Data Siswa', autoH1: true },
-  'Data Siswa Terinput':              { status: 'Lead Captured',             nextAction: 'Tidak Ada', isTerminal: true },
+  'Data Siswa Terinput':              { status: 'Identity Captured',         nextAction: 'Tidak Ada', isTerminal: true },
   'Ditolak Final':                    { status: 'Tidak Bisa Sosialisasi',    nextAction: 'Tidak Ada', isTerminal: true, requiresAlasan: true },
   'Tutup / Merger':                   { status: 'Nonaktif / Tutup / Merger', nextAction: 'Tidak Ada', isTerminal: true },
 };
@@ -257,10 +257,11 @@ async function statSekolah(user, query = {}) {
     proses:       (map['Tunggu Visit Ulang'] || 0) + (map['Tunggu Keputusan'] || 0)
                 + (map['Tunggu Jadwal Sosialisasi'] || 0) + (map['Sosialisasi Terjadwal'] || 0),
     sosialisasiTerjadwal: map['Sosialisasi Terjadwal'] || 0,
-    sosialisasi:  map['Sudah Sosialisasi'] || 0,
-    leadCaptured: map['Lead Captured'] || 0,
-    tidakBisa:    map['Tidak Bisa Sosialisasi'] || 0,
-    nonaktif:     map['Nonaktif / Tutup / Merger'] || 0,
+    sosialisasi:      map['Sudah Sosialisasi'] || 0,
+    identityCaptured: (map['Identity Captured'] || 0) + (map['Lead Captured'] || 0),
+    leadCaptured:     (map['Identity Captured'] || 0) + (map['Lead Captured'] || 0),
+    tidakBisa:        map['Tidak Bisa Sosialisasi'] || 0,
+    nonaktif:         map['Nonaktif / Tutup / Merger'] || 0,
   };
 }
 
@@ -773,9 +774,9 @@ async function hapusSekolah(id, alasan, user) {
   );
   if (parseInt(aktCount, 10) > 0) throw new Error('BLOCKED_HAS_ACTIVITY');
 
-  // Guard: Lead Captured?
+  // Guard: Identity / Lead Captured?
   const [[{ cnt: leadCnt }]] = await pool.query(
-    "SELECT COUNT(*) as cnt FROM sekolah_periode WHERE id_sekolah = ? AND status_terkini = 'Lead Captured' LIMIT 1",
+    "SELECT COUNT(*) as cnt FROM sekolah_periode WHERE id_sekolah = ? AND status_terkini IN ('Identity Captured', 'Lead Captured') LIMIT 1",
     [id]
   );
   if (parseInt(leadCnt, 10) > 0) throw new Error('BLOCKED_LEAD_CAPTURED');
@@ -987,8 +988,8 @@ async function buatAktivitasEkstra(sekolahId, data, user) {
     'SELECT status_terkini FROM sekolah_periode WHERE id_sekolah = ? AND marketing_period = ? LIMIT 1',
     [sekolahId, mp]
   );
-  if (!sp || !['Sudah Sosialisasi', 'Lead Captured'].includes(sp.status_terkini)) {
-    throw new Error('Aktivitas ekstra hanya bisa dibuat untuk sekolah berstatus Sudah Sosialisasi atau Lead Captured.');
+  if (!sp || !['Sudah Sosialisasi', 'Identity Captured', 'Lead Captured'].includes(sp.status_terkini)) {
+    throw new Error('Aktivitas ekstra hanya bisa dibuat untuk sekolah berstatus Sudah Sosialisasi atau Identity Captured.');
   }
 
   const VALID_JENIS = ['WhatsApp PIC', 'Telepon PIC', 'Meeting PIC'];
