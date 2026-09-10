@@ -93,12 +93,43 @@ async function syncEventToCalendar(userId, eventDetails) {
   } catch (error) {
     console.error('[Calendar Sync] Error creating event:', error.message);
     // If the token is invalid or revoked, we might need to handle it gracefully
-    throw error;
+  }
+}
+
+async function deleteEventFromCalendar(userId, eventId) {
+  if (!eventId) return null;
+  try {
+    const [rows] = await pool.query('SELECT google_access_token, google_refresh_token, google_token_expiry FROM users WHERE id = ?', [userId]);
+    if (rows.length === 0) return null;
+    const user = rows[0];
+
+    if (!user || !user.google_refresh_token) {
+      return null;
+    }
+
+    const oauth2Client = getOAuth2Client();
+    oauth2Client.setCredentials({
+      access_token: user.google_access_token,
+      refresh_token: user.google_refresh_token,
+      expiry_date: user.google_token_expiry
+    });
+
+    const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+    await calendar.events.delete({
+      calendarId: 'primary',
+      eventId: eventId,
+    });
+    console.log('[Calendar Sync] Event deleted from Google Calendar:', eventId);
+    return true;
+  } catch (error) {
+    console.error('[Calendar Sync] Error deleting event:', error.message);
+    return false;
   }
 }
 
 module.exports = {
   generateAuthUrl,
   getTokensFromCode,
-  syncEventToCalendar
+  syncEventToCalendar,
+  deleteEventFromCalendar,
 };

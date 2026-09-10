@@ -108,6 +108,17 @@ async function login(username, password) {
   
   if (defaultUser) {
     rows = defaultUser;
+    isTenant = true;
+    const { mainPool } = require('../../../config/database');
+    try {
+      const [[tdb]] = await mainPool.query(
+        'SELECT tenant_id FROM tenant_databases WHERE db_name = ? LIMIT 1',
+        [process.env.DB_NAME || 'u294320793_crmdemo']
+      );
+      tenantId = tdb ? tdb.tenant_id : 'crm-demo';
+    } catch (_) {
+      tenantId = 'crm-demo';
+    }
   } else {
     // 2. Jika tidak ketemu, cari di seluruh tenant DB (Multi-tenant login)
     const { mainPool } = require('../../../config/database');
@@ -209,7 +220,7 @@ async function login(username, password) {
     username: String(rows.username).trim(),
     nama:     String(rows.nama    || '').trim(),
     role:     String(rows.role    || '').trim(),
-    tenant_id: isTenant ? tenantId : 'Nexa Utama',
+    tenant_id: isTenant ? tenantId : 'crm-demo',
   };
 
   const payload = { ...user, selectedPeriod: activePeriod };
@@ -244,13 +255,38 @@ const transporter = nodemailer.createTransport({
 async function forgotPassword(email) {
   if (!email) return { success: false, message: 'Email tidak boleh kosong.' };
 
-  // Cari user dengan email ini
-  const [[user]] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [String(email).trim()]);
-  
-  // Note: Untuk multi-tenant (Phase 3), di masa depan harus dicari ke semua database tenant,
-  // atau user harus tahu dia login di tenant mana. Saat ini kita asumsikan mencari di default tenant.
-  if (!user) {
-    // Return sukses aja biar gak ngasih tahu email terdaftar/gak (keamanan)
+  const cleanEmail = String(email).trim();
+  let targetUser = null;
+  let targetPool = pool;
+
+  // 1. Cek di default pool
+  const [[user]] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [cleanEmail]);
+  if (user) {
+    targetUser = user;
+    targetPool = pool;
+  } else {
+    // 2. Cek lintas tenant
+    const { mainPool, getDynamicPool } = require('../../../config/database');
+    try {
+      const [tenants] = await mainPool.query('SELECT * FROM tenant_databases');
+      for (const t of tenants) {
+        try {
+          const tPool = getDynamicPool({
+            host: t.db_host, port: 3306, user: t.db_user, password: t.db_password, database: t.db_name
+          });
+          const [[found]] = await tPool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [cleanEmail]);
+          if (found) {
+            targetUser = found;
+            targetPool = tPool;
+            break;
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  if (!targetUser) {
+    // Return success to prevent email enumeration attack
     return { success: true, message: 'Jika email terdaftar, instruksi reset password telah dikirimkan.' };
   }
 
@@ -259,12 +295,29 @@ async function forgotPassword(email) {
   const expires = Date.now() + 3600000; // 1 jam dari sekarang
 
   // Simpan token ke db
-  await pool.query(
+  await targetPool.query(
     'UPDATE users SET reset_password_token = ?, reset_password_expires = ? WHERE id = ?',
-    [token, expires, user.id]
+    [token, expires, targetUser.id]
   );
 
-  // Buat link (asumsi frontend running di URL tertentu, bisa pakai process.env.FRONTEND_URL)
+  // Rekam CQRS Immutable Event
+  try {
+    const eventId = `EVT-USR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    await targetPool.query(
+      `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
+       VALUES (?, 'user', ?, 'PasswordResetRequested', ?, ?, NOW())`,
+      [
+        eventId,
+        String(targetUser.id),
+        JSON.stringify({ email: cleanEmail, expires_at: new Date(expires).toISOString() }),
+        targetUser.username
+      ]
+    );
+  } catch (evtErr) {
+    console.warn('[Auth] Gagal mencatat event PasswordResetRequested:', evtErr.message);
+  }
+
+  // Buat link reset password
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
   const resetLink = `${frontendUrl}/reset-password?token=${token}`;
 
@@ -272,10 +325,10 @@ async function forgotPassword(email) {
   try {
     await transporter.sendMail({
       from: `"Nexa CRM" <${process.env.SMTP_USER || 'no-reply@nexa.id'}>`,
-      to: email,
+      to: cleanEmail,
       subject: 'Reset Password - Nexa CRM',
       html: `
-        <h3>Halo ${user.nama},</h3>
+        <h3>Halo ${targetUser.nama || targetUser.username},</h3>
         <p>Kami menerima permintaan untuk mereset password akun Anda di Nexa CRM.</p>
         <p>Silakan klik tautan di bawah ini untuk mengatur password baru:</p>
         <a href="${resetLink}" style="display:inline-block;padding:10px 15px;background:#007BFF;color:#fff;text-decoration:none;border-radius:5px;">Reset Password</a>
@@ -284,11 +337,9 @@ async function forgotPassword(email) {
         <p>Jika Anda tidak pernah meminta reset password, abaikan email ini.</p>
       `,
     });
-    console.log('[Auth] Forgot password email sent to:', email);
+    console.log('[Auth] Forgot password email sent to:', cleanEmail);
   } catch (err) {
-    console.error('[Auth] Failed to send email:', err);
-    // Kita tetap bilang sukses ke user supaya prosesnya smooth, 
-    // tapi tokennya bisa kita clear atau biarkan expired
+    console.error('[Auth] Failed to send email:', err.message);
   }
 
   return { success: true, message: 'Jika email terdaftar, instruksi reset password telah dikirimkan.' };
@@ -299,16 +350,44 @@ async function resetPassword(token, newPassword) {
     return { success: false, message: 'Token dan password baru wajib diisi.' };
   }
 
+  let targetUser = null;
+  let targetPool = pool;
+
+  // 1. Cek di default pool
   const [[user]] = await pool.query(
     'SELECT * FROM users WHERE reset_password_token = ? LIMIT 1',
     [token]
   );
 
-  if (!user) {
+  if (user) {
+    targetUser = user;
+    targetPool = pool;
+  } else {
+    // 2. Cek lintas tenant
+    const { mainPool, getDynamicPool } = require('../../../config/database');
+    try {
+      const [tenants] = await mainPool.query('SELECT * FROM tenant_databases');
+      for (const t of tenants) {
+        try {
+          const tPool = getDynamicPool({
+            host: t.db_host, port: 3306, user: t.db_user, password: t.db_password, database: t.db_name
+          });
+          const [[found]] = await tPool.query('SELECT * FROM users WHERE reset_password_token = ? LIMIT 1', [token]);
+          if (found) {
+            targetUser = found;
+            targetPool = tPool;
+            break;
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  if (!targetUser) {
     return { success: false, message: 'Token tidak valid atau sudah tidak berlaku.' };
   }
 
-  if (Date.now() > user.reset_password_expires) {
+  if (Date.now() > Number(targetUser.reset_password_expires)) {
     return { success: false, message: 'Token sudah kedaluwarsa.' };
   }
 
@@ -316,25 +395,54 @@ async function resetPassword(token, newPassword) {
   const newSalt = _generateSalt();
   const newHash = _hashSHA256(newPassword, newSalt);
 
-  await pool.query(
+  await targetPool.query(
     'UPDATE users SET password = ?, salt = ?, reset_password_token = NULL, reset_password_expires = NULL WHERE id = ?',
-    [newHash, newSalt, user.id]
+    [newHash, newSalt, targetUser.id]
   );
+
+  // Rekam CQRS Immutable Event
+  try {
+    const eventId = `EVT-USR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    await targetPool.query(
+      `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
+       VALUES (?, 'user', ?, 'PasswordResetCompleted', ?, ?, NOW())`,
+      [
+        eventId,
+        String(targetUser.id),
+        JSON.stringify({ username: targetUser.username }),
+        targetUser.username
+      ]
+    );
+  } catch (evtErr) {
+    console.warn('[Auth] Gagal mencatat event PasswordResetCompleted:', evtErr.message);
+  }
 
   return { success: true, message: 'Password berhasil diubah. Silakan login kembali.' };
 }
 
 async function getProfile(username) {
-  const [[user]] = await pool.query(
-    'SELECT username, nama, role, email, foto_url, created_at FROM users WHERE username = ? LIMIT 1',
-    [username]
-  );
+  const q = `
+    SELECT 
+      u.id, 
+      u.username, 
+      u.nama, 
+      u.role, 
+      u.status, 
+      u.email, 
+      u.supervisor_id,
+      s.nama AS supervisor_nama
+    FROM users u
+    LEFT JOIN users s ON u.supervisor_id = s.id
+    WHERE u.username = ?
+    LIMIT 1
+  `;
+  const [[user]] = await pool.query(q, [username]);
   return user || null;
 }
 
-async function changePassword(username, oldPassword, newPassword) {
+async function changePassword(username, oldPassword, newPassword, actor = null) {
   const [[user]] = await pool.query(
-    'SELECT id, password, salt FROM users WHERE username = ? LIMIT 1',
+    'SELECT id, username, password, salt, role FROM users WHERE username = ? LIMIT 1',
     [username]
   );
   if (!user) return { success: false, message: 'User tidak ditemukan.' };
@@ -346,9 +454,26 @@ async function changePassword(username, oldPassword, newPassword) {
   const newHash = _hashSHA256(newPassword, newSalt);
 
   await pool.query(
-    'UPDATE users SET password = ?, salt = ? WHERE id = ?',
+    'UPDATE users SET password = ?, salt = ?, reset_password_token = NULL, reset_password_expires = NULL WHERE id = ?',
     [newHash, newSalt, user.id]
   );
+
+  // Rekam CQRS Immutable Event ke events_log
+  try {
+    const eventId = `EVT-USR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    await pool.query(
+      `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
+       VALUES (?, 'user', ?, 'UserPasswordChangedSelf', ?, ?, NOW())`,
+      [
+        eventId,
+        String(user.id),
+        JSON.stringify({ username: user.username, role: user.role }),
+        actor || username
+      ]
+    );
+  } catch (evtErr) {
+    console.warn('[Auth] Gagal mencatat event UserPasswordChangedSelf:', evtErr.message);
+  }
 
   return { success: true, message: 'Password berhasil diubah.' };
 }

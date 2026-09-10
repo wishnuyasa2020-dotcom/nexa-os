@@ -102,37 +102,67 @@ async function takeoverLead(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /api/v1/nurturing/snooze/add
-// Body: { idSiswa, alasan }
+// POST /api/v1/nurturing/snooze/request & /api/v1/nurturing/snooze/add
+// Body: { idSiswa / id_siswa, interval_days, alasan }
 // ─────────────────────────────────────────────────────────────────────────────
-async function addSnooze(req, res) {
+async function requestSnooze(req, res) {
   try {
-    const { idSiswa, alasan } = req.body;
-    if (!idSiswa) return res.status(400).json({ status: 'error', message: 'idSiswa diperlukan.' });
+    const idSiswa = req.body.idSiswa || req.body.id_siswa;
+    const interval_days = req.body.interval_days || req.body.intervalDays;
+    const alasan = req.body.alasan;
 
-    const result = await svc.addManualSnooze(idSiswa, alasan, req.user);
+    if (!idSiswa) return res.status(400).json({ status: 'error', message: 'ID siswa (idSiswa / id_siswa) diperlukan.' });
+
+    const result = await svc.addManualSnooze(idSiswa, { interval_days, alasan }, req.user);
     res.status(201).json({ status: 'ok', ...result });
   } catch (err) {
-    console.error('[nurturing] addSnooze Error:', err.message);
-    res.status(500).json({ status: 'error', message: err.message });
+    console.error('[nurturing] requestSnooze Error:', err.message);
+    const status = err.status || 500;
+    res.status(status).json({ status: 'error', message: err.message });
+  }
+}
+
+async function addSnooze(req, res) {
+  return requestSnooze(req, res);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/nurturing/start/:id
+// Mendaftarkan siswa ke kampanye probing (Event: NurturingStarted)
+// ─────────────────────────────────────────────────────────────────────────────
+async function startNurturing(req, res) {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body || {};
+    if (!id) return res.status(400).json({ status: 'error', message: 'ID siswa diperlukan.' });
+
+    const result = await svc.startNurturing(id, req.user, reason);
+    res.status(201).json({ status: 'ok', ...result });
+  } catch (err) {
+    console.error('[nurturing] startNurturing Error:', err.message);
+    res.status(400).json({ status: 'error', message: err.message });
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DELETE /api/v1/nurturing/snooze/:id
-// Hentikan snooze lebih awal (bangunkan manual)
+// POST /api/v1/nurturing/snooze/wakeup & DELETE /api/v1/nurturing/snooze/:id
+// Hentikan snooze lebih awal (Bangunkan Paksa)
 // ─────────────────────────────────────────────────────────────────────────────
-async function stopSnooze(req, res) {
+async function wakeupSnooze(req, res) {
   try {
-    const { id } = req.params;
-    if (!id) return res.status(400).json({ status: 'error', message: 'ID siswa diperlukan.' });
+    const idSiswa = req.body?.idSiswa || req.body?.id_siswa || req.params?.id;
+    if (!idSiswa) return res.status(400).json({ status: 'error', message: 'ID siswa diperlukan.' });
 
-    const result = await svc.stopSnooze(id, req.user);
+    const result = await svc.stopSnooze(idSiswa, req.user);
     res.json({ status: 'ok', ...result });
   } catch (err) {
-    console.error('[nurturing] stopSnooze Error:', err.message);
+    console.error('[nurturing] wakeupSnooze Error:', err.message);
     res.status(500).json({ status: 'error', message: err.message });
   }
+}
+
+async function stopSnooze(req, res) {
+  return wakeupSnooze(req, res);
 }
 
 module.exports = {
@@ -142,6 +172,9 @@ module.exports = {
   getSnoozeLeads,
   forceTrigger,
   takeoverLead,
+  startNurturing,
+  requestSnooze,
+  wakeupSnooze,
   addSnooze,
   stopSnooze,
 };

@@ -345,21 +345,51 @@ async function getDashboardSummary(user, marketingPeriodArg, monthFilter = 'All'
   });
   const sekolahTersosialisasi = funnelSekolahMap['Sudah Sosialisasi'] || 0;
 
-  const q2 = `SELECT status_terkini, COUNT(*) AS cnt FROM siswa_periode sp WHERE marketing_period = ?${croSiswa}${monthSiswaClause} GROUP BY status_terkini`;
+  const q2 = `
+    SELECT 
+      sp.status_terkini,
+      sp.commercial_state,
+      COUNT(*) AS cnt 
+    FROM siswa_periode sp 
+    WHERE marketing_period = ?${croSiswa}${monthSiswaClause} 
+    GROUP BY sp.status_terkini, sp.commercial_state
+  `;
   const [siswaRows] = await pool.query(q2, paramsSiswa);
 
-  const funnelSiswaMap = {};
   let totalSiswa = 0;
-  siswaRows.forEach(r => {
-    funnelSiswaMap[r.status_terkini] = parseInt(r.cnt, 10);
-    totalSiswa += parseInt(r.cnt, 10);
-  });
+  let terdaftar = 0;
+  let prospekAktif = 0;
+  let konsultasi = 0;
+  let siapDaftar = 0;
+  let calonProspek = 0;
 
-  const terdaftar = funnelSiswaMap['Terdaftar'] || 0;
-  const prospekAktif = (funnelSiswaMap['Prospek Aktif'] || 0) + (funnelSiswaMap['Konsultasi'] || 0) + (funnelSiswaMap['Layak Home Visit'] || 0) + (funnelSiswaMap['Home Visit'] || 0) + (funnelSiswaMap['Siap Daftar'] || 0) + (funnelSiswaMap['Terdaftar'] || 0);
-  const konsultasi = (funnelSiswaMap['Konsultasi'] || 0) + (funnelSiswaMap['Layak Home Visit'] || 0) + (funnelSiswaMap['Home Visit'] || 0) + (funnelSiswaMap['Siap Daftar'] || 0) + (funnelSiswaMap['Terdaftar'] || 0);
-  const siapDaftar = (funnelSiswaMap['Siap Daftar'] || 0) + (funnelSiswaMap['Terdaftar'] || 0);
-  const calonProspek = (funnelSiswaMap['Calon Prospek'] || 0) + prospekAktif;
+  siswaRows.forEach(r => {
+    const c = parseInt(r.cnt, 10);
+    totalSiswa += c;
+    const st = r.status_terkini || '';
+    const cs = r.commercial_state || '';
+
+    // Closing (Customer / Terdaftar)
+    if (cs === 'Customer' || st === 'Terdaftar') {
+      terdaftar += c;
+    }
+    // Prospek Aktif
+    if (['Prospect', 'Opportunity', 'Registered Opportunity', 'Customer'].includes(cs) || ['Prospek Aktif', 'Konsultasi', 'Layak Home Visit', 'Home Visit', 'Siap Daftar', 'Terdaftar'].includes(st)) {
+      prospekAktif += c;
+    }
+    // Tahap Konsultasi & Di Atasnya
+    if (['Opportunity', 'Registered Opportunity', 'Customer'].includes(cs) || ['Konsultasi', 'Layak Home Visit', 'Home Visit', 'Siap Daftar', 'Terdaftar'].includes(st)) {
+      konsultasi += c;
+    }
+    // Siap Daftar
+    if (cs === 'Registered Opportunity' || st === 'Siap Daftar') {
+      siapDaftar += c;
+    }
+    // Calon Prospek (Lead)
+    if (cs === 'Lead' || st === 'Calon Prospek') {
+      calonProspek += c;
+    }
+  });
 
   const { mainPool, tenantStorage } = require('../../config/database');
   let quota = { tier: 'Free', limitSiswa: 300, usedSiswa: 0, limitSekolah: 10, usedSekolah: 0, limitUser: 4, usedUser: 0 };
@@ -413,9 +443,9 @@ async function getDashboardSummary(user, marketingPeriodArg, monthFilter = 'All'
   return {
     stats: {
       totalSekolah, sekolahTersosialisasi,
-      totalSiswa, calonProspek: funnelSiswaMap['Calon Prospek'] || 0,
-      prospekAktif: funnelSiswaMap['Prospek Aktif'] || 0, konsultasi: funnelSiswaMap['Konsultasi'] || 0,
-      siapDaftar: funnelSiswaMap['Siap Daftar'] || 0, totalTerdaftar: terdaftar
+      totalSiswa, calonProspek,
+      prospekAktif, konsultasi,
+      siapDaftar, totalTerdaftar: terdaftar
     },
     konversi: {
       sekolah: totalSekolah, sudahSosialisasi: sekolahTersosialisasi, pctSosialisasi: totalSekolah > 0 ? Math.round((sekolahTersosialisasi / totalSekolah) * 100) : 0,
@@ -531,12 +561,51 @@ async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All'
   
   const funnelSekolah = STATUS_SEKOLAH.map(s => ({ status: s, count: funnelSekolahMap[s] || 0 }));
 
-  const q2 = `SELECT status_terkini, COUNT(*) AS cnt FROM siswa_periode sp WHERE marketing_period = ?${croSiswa}${monthSiswaClause} GROUP BY status_terkini`;
+  // B2C Funnel Pipeline (5 Tahap Universal Ontologi: Known Profile ➔ Lead ➔ Prospect ➔ Opportunity ➔ Customer)
+  const q2 = `
+    SELECT 
+      CASE 
+        WHEN sp.commercial_state IS NOT NULL AND sp.commercial_state != '' THEN
+          CASE sp.commercial_state
+            WHEN 'Known' THEN 'Known Profile'
+            WHEN 'Audience' THEN 'Known Profile'
+            WHEN 'Lead' THEN 'Lead'
+            WHEN 'Prospect' THEN 'Prospect'
+            WHEN 'Opportunity' THEN 'Opportunity'
+            WHEN 'Registered Opportunity' THEN 'Opportunity'
+            WHEN 'Customer' THEN 'Customer'
+            ELSE 'Lead'
+          END
+        ELSE
+          CASE sp.status_terkini
+            WHEN 'Data Masuk' THEN 'Known Profile'
+            WHEN 'Calon Prospek' THEN 'Lead'
+            WHEN 'Prospek Aktif' THEN 'Prospect'
+            WHEN 'Konsultasi' THEN 'Opportunity'
+            WHEN 'Layak Home Visit' THEN 'Opportunity'
+            WHEN 'Home Visit' THEN 'Opportunity'
+            WHEN 'Siap Daftar' THEN 'Opportunity'
+            WHEN 'Terdaftar' THEN 'Customer'
+            ELSE 'Lead'
+          END
+      END AS pipeline_stage,
+      COUNT(*) AS cnt
+    FROM siswa_periode sp
+    WHERE marketing_period = ?${croSiswa}${monthSiswaClause}
+      AND (sp.commercial_state != 'Disqualified' OR sp.commercial_state IS NULL)
+      AND (sp.status_terkini != 'Tidak Lanjut' OR sp.status_terkini IS NULL)
+    GROUP BY pipeline_stage
+  `;
   const [siswaRows] = await pool.query(q2, paramsSiswa);
   
   const funnelSiswaMap = {};
-  siswaRows.forEach(r => funnelSiswaMap[r.status_terkini] = parseInt(r.cnt, 10));
-  const funnelSiswa = STATUS_SISWA.map(s => ({ status: s, count: funnelSiswaMap[s] || 0 }));
+  siswaRows.forEach(r => funnelSiswaMap[r.pipeline_stage] = parseInt(r.cnt, 10));
+  
+  const ONTOLOGY_STAGES = ['Known Profile', 'Lead', 'Prospect', 'Opportunity', 'Customer'];
+  const funnelSiswa = ONTOLOGY_STAGES.map(stage => ({
+    status: stage,
+    count: funnelSiswaMap[stage] || 0
+  }));
 
   return { funnelSekolah, funnelSiswa };
 }
@@ -835,7 +904,8 @@ async function getTaskList(category, period, user) {
       DATE_FORMAT(sp.due_date, '%Y-%m-%d') as dueDateISO,
       DATEDIFF(sp.due_date, CURDATE()) as dueDiff,
       sp.pj_sekolah,
-      DATEDIFF(CURDATE(), sp.status_updated_date) as aging
+      DATEDIFF(CURDATE(), sp.status_updated_date) as aging,
+      IFNULL(sp.intent, '') as intent
     FROM sekolah_periode sp
     LEFT JOIN master_sekolah ms ON sp.id_sekolah = ms.id_sekolah
     WHERE sp.marketing_period = ? AND sp.next_action != 'Tidak Ada' AND sp.next_action != '' ${dateFilterSqlDue}
@@ -853,7 +923,10 @@ async function getTaskList(category, period, user) {
       DATE_FORMAT(sp.due_date, '%Y-%m-%d') as dueDateISO,
       DATEDIFF(sp.due_date, CURDATE()) as dueDiff,
       sp.prioritas, sp.cro,
-      DATEDIFF(CURDATE(), sp.status_updated_date) as aging
+      DATEDIFF(CURDATE(), sp.status_updated_date) as aging,
+      IFNULL(sp.commercial_state, sp.status_terkini) as commercial_state,
+      IFNULL(sp.intent, sp.prioritas) as intent,
+      IFNULL(sp.priority_score, 0) as priority_score
     FROM siswa_periode sp
     LEFT JOIN master_siswa ms ON sp.id_siswa = ms.id_siswa
     WHERE sp.marketing_period = ? AND sp.next_action != 'Tidak Ada' AND sp.next_action != '' ${dateFilterSqlDue}
@@ -915,6 +988,8 @@ async function getTaskList(category, period, user) {
       id: String(row.id_sekolah || ''),
       nama: String(row.nama_sekolah || ''),
       status: String(row.status_terkini || ''),
+      commercialState: String(row.status_terkini || ''),
+      intent: String(row.intent || ''),
       nextAction: String(row.next_action || ''),
       dueDate: String(row.dueDate || ''),
       dueDateISO: String(row.dueDateISO || ''),
@@ -931,6 +1006,9 @@ async function getTaskList(category, period, user) {
       id: String(row.id_siswa || ''),
       nama: String(row.nama_lengkap || ''),
       status: String(row.status_terkini || ''),
+      commercialState: String(row.commercial_state || row.status_terkini || ''),
+      intent: String(row.intent || row.prioritas || ''),
+      priorityScore: Number(row.priority_score || 0),
       nextAction: String(row.next_action || ''),
       dueDate: String(row.dueDate || ''),
       dueDateISO: String(row.dueDateISO || ''),
@@ -943,11 +1021,15 @@ async function getTaskList(category, period, user) {
 
   rowsHV.forEach(row => {
     const idSiswaNama = String(row.id_siswa_nama || '');
+    const siswaId = idSiswaNama.split('_')[0] || idSiswaNama;
     tasks.push({
       tipe: 'homevisit',
       id: idSiswaNama,
+      siswaId: siswaId,
       nama: idSiswaNama,
       status: String(row.status_terkini || ''),
+      commercialState: 'Opportunity',
+      intent: String(row.prioritas || ''),
       nextAction: String(row.next_action || ''),
       dueDate: String(row.dueDate || ''),
       dueDateISO: String(row.dueDateISO || ''),
@@ -2500,9 +2582,9 @@ async function getDashboardLeaderboard(user, period) {
     LEFT JOIN users u ON sp.cro = u.username
     WHERE 
       sp.marketing_period = ?
-      AND sp.status_terkini = 'Terdaftar'
-      AND MONTH(sp.status_updated_date) = MONTH(CURDATE())
-      AND YEAR(sp.status_updated_date) = YEAR(CURDATE())
+      AND (sp.commercial_state = 'Customer' OR sp.status_terkini = 'Terdaftar')
+      AND MONTH(COALESCE(sp.status_updated_date, sp.created_date)) = MONTH(CURDATE())
+      AND YEAR(COALESCE(sp.status_updated_date, sp.created_date)) = YEAR(CURDATE())
     GROUP BY sp.cro, u.nama
     ORDER BY total_closing DESC
     LIMIT 3
@@ -2527,11 +2609,11 @@ async function getDashboardLeaderboard(user, period) {
                RANK() OVER (ORDER BY COUNT(*) DESC) AS rn
         FROM siswa_periode sp
         WHERE sp.marketing_period = ?
-          AND sp.status_terkini = 'Terdaftar'
-          AND MONTH(sp.status_updated_date) = MONTH(CURDATE())
-          AND YEAR(sp.status_updated_date) = YEAR(CURDATE())
+          AND (sp.commercial_state = 'Customer' OR sp.status_terkini = 'Terdaftar')
+          AND MONTH(COALESCE(sp.status_updated_date, sp.created_date)) = MONTH(CURDATE())
+          AND YEAR(COALESCE(sp.status_updated_date, sp.created_date)) = YEAR(CURDATE())
         GROUP BY sp.cro
-      ) sub WHERE sub.sp.cro = ?
+      ) sub WHERE sub.cro = ?
     `, [mp, user.username]);
 
     if (rankRows.length > 0) {
@@ -2562,28 +2644,72 @@ async function rescheduleTask(id, tipe, newDate, alasan, user) {
   const updatedBy = user.username;
 
   if (tipe === 'sekolah') {
-    // Update due_date di sekolah_periode + append catatan reschedule
     const [rows] = await pool.query(
-      'SELECT catatan FROM sekolah_periode WHERE id_sekolah = ?',
+      `SELECT sp.catatan, sp.status_terkini, sp.next_action, sp.pj_sekolah, sp.marketing_period, ms.nama_sekolah 
+       FROM sekolah_periode sp 
+       LEFT JOIN master_sekolah ms ON sp.id_sekolah = ms.id_sekolah 
+       WHERE sp.id_sekolah = ? ORDER BY sp.id_record DESC LIMIT 1`,
       [id]
     );
-    const oldCatatan = rows[0]?.catatan || '';
+    const sp = rows[0] || {};
     const logEntry = `\n[Tunda ${now.toLocaleDateString('id-ID')} oleh ${updatedBy}]: ${alasan}`;
     await pool.query(
       `UPDATE sekolah_periode SET due_date = ?, catatan = CONCAT(IFNULL(catatan,''), ?), status_updated_date = NOW() WHERE id_sekolah = ?`,
       [newDate, logEntry, id]
     );
 
+    // Event-Sourcing immutable record ke aktivitas_sekolah
+    try {
+      const activePeriod = sp.marketing_period || await getActiveMarketingPeriod();
+      const idSekolahNama = `${id} - ${sp.nama_sekolah || ''}`;
+      await pool.query(`
+        INSERT INTO aktivitas_sekolah
+          (marketing_period, \`timestamp\`, tanggal, id_sekolah_nama, aktivitas, hasil, status_terkini, next_action, due_date, status_jadwal, catatan, pic_yang_dihubungi)
+        VALUES (?, NOW(), CURDATE(), ?, 'Tunda Agenda', 'Jadwal Ditunda', ?, ?, ?, 'Terjadwal', ?, ?)
+      `, [
+        activePeriod,
+        idSekolahNama,
+        sp.status_terkini || 'Engaged',
+        sp.next_action || 'Visit Ulang',
+        newDate,
+        alasan,
+        sp.pj_sekolah || updatedBy
+      ]);
+    } catch (actErr) {
+      console.warn('rescheduleTask: gagal mencatat event ke aktivitas_sekolah:', actErr.message);
+    }
+
   } else if (tipe === 'siswa') {
     const [rows] = await pool.query(
-      'SELECT catatan FROM siswa_periode WHERE id_siswa = ?',
+      'SELECT status_terkini, next_action, cro, marketing_period FROM siswa_periode WHERE id_siswa = ? ORDER BY id_record DESC LIMIT 1',
       [id]
     );
+    const sp = rows[0] || {};
     const logEntry = `\n[Tunda ${now.toLocaleDateString('id-ID')} oleh ${updatedBy}]: ${alasan}`;
     await pool.query(
       `UPDATE siswa_periode SET due_date = ?, catatan = CONCAT(IFNULL(catatan,''), ?), status_updated_date = NOW() WHERE id_siswa = ?`,
       [newDate, logEntry, id]
     );
+
+    // Event-Sourcing immutable record ke aktivitas_siswa
+    try {
+      await pool.query(`
+        INSERT INTO aktivitas_siswa
+          (id_siswa, jenis_aktivitas, tanggal, hasil_aktivitas, status_sebelum, status_sesudah,
+           next_action, due_date, catatan, pj_cro, event_type, channel)
+        VALUES (?, 'Reschedule Task', CURDATE(), 'Jadwal Ditunda', ?, ?, ?, ?, ?, ?, 'TaskRescheduled', 'Sistem')
+      `, [
+        id,
+        sp.status_terkini || 'Lead',
+        sp.status_terkini || 'Lead',
+        sp.next_action || 'Follow Up',
+        newDate,
+        alasan,
+        sp.cro || updatedBy
+      ]);
+    } catch (actErr) {
+      console.warn('rescheduleTask: gagal mencatat event ke aktivitas_siswa:', actErr.message);
+    }
 
   } else if (tipe === 'homevisit') {
     await pool.query(

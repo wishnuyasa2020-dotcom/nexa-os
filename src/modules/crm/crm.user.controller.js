@@ -23,32 +23,45 @@ async function getDetail(req, res) {
   }
 }
 
+async function getQuota(req, res) {
+  try {
+    const data = await svc.getRoleQuota();
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[users] getQuota Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
 async function create(req, res) {
   try {
-    const data = await svc.addUser(req.body);
+    const actor = req.user?.nama || req.user?.username || 'Admin';
+    const data = await svc.addUser(req.body, actor);
     res.status(201).json({ status: 'ok', data });
   } catch (err) {
     console.error('[users] create Error:', err);
     const code = err.isQuotaError ? 403 : (err.message.includes('terdaftar') ? 409 : 400);
-    res.status(code).json({ status: 'error', message: err.message });
+    res.status(code).json({ status: 'error', message: err.message, isQuotaError: err.isQuotaError || false });
   }
 }
 
 async function update(req, res) {
   try {
-    const data = await svc.updateUser(req.params.id, req.body);
+    const actor = req.user?.nama || req.user?.username || 'Admin';
+    const data = await svc.updateUser(req.params.id, req.body, actor);
     res.json({ status: 'ok', data });
   } catch (err) {
     console.error('[users] update Error:', err);
     const code = err.isQuotaError ? 403 : 400;
-    res.status(code).json({ status: 'error', message: err.message });
+    res.status(code).json({ status: 'error', message: err.message, isQuotaError: err.isQuotaError || false });
   }
 }
 
 async function resetPassword(req, res) {
   try {
+    const actor = req.user?.nama || req.user?.username || 'Admin';
     const { new_password } = req.body;
-    const data = await svc.resetPassword(req.params.id, new_password);
+    const data = await svc.resetPassword(req.params.id, new_password, actor);
     res.json({ status: 'ok', data });
   } catch (err) {
     console.error('[users] resetPassword Error:', err);
@@ -58,7 +71,8 @@ async function resetPassword(req, res) {
 
 async function remove(req, res) {
   try {
-    await svc.softDeleteUser(req.params.id);
+    const actor = req.user?.nama || req.user?.username || 'Admin';
+    await svc.softDeleteUser(req.params.id, actor);
     res.json({ status: 'ok', message: 'User dinonaktifkan.' });
   } catch (err) {
     console.error('[users] remove Error:', err);
@@ -69,6 +83,7 @@ async function remove(req, res) {
 module.exports = {
   getList,
   getDetail,
+  getQuota,
   create,
   update,
   resetPassword,

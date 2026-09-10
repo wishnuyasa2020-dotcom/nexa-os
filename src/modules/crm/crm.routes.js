@@ -11,7 +11,9 @@ const chatCtrl = require('./chat/chat.controller');
 const templateCtrl = require('./chat/template.controller');
 const webpushCtrl = require('./chat/webpush.controller');
 const userCtrl = require('./crm.user.controller');
+const authCtrl = require('./auth/auth.controller');
 const settingsCtrl = require('./crm.settings.controller');
+const cohortCtrl = require('./cohort/cohort.controller');
 const calendarRoutes = require('./calendar/calendar.routes');
 const { requireAuth } = require('../../middleware/requireAuth');
 
@@ -26,6 +28,12 @@ router.use('/calendar', calendarRoutes);
 router.use(requireAuth);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PROFIL SAYA & GANTI PASSWORD (Self-Service)
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/profile', authCtrl.getProfile);
+router.put('/profile/change-password', authCtrl.changePassword);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // INITIAL DATA
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/initial-data', ctrl.getInitialData);
@@ -33,6 +41,7 @@ router.get('/initial-data', ctrl.getInitialData);
 // ─────────────────────────────────────────────────────────────────────────────
 // USERS — RESTful V1 (Manajemen Tim)
 // ─────────────────────────────────────────────────────────────────────────────
+router.get('/users/quota', userCtrl.getQuota);
 router.get('/users', userCtrl.getList);
 router.get('/users/:id', userCtrl.getDetail);
 router.post('/users', userCtrl.create);
@@ -41,21 +50,36 @@ router.patch('/users/:id/reset-password', userCtrl.resetPassword);
 router.delete('/users/:id', userCtrl.remove);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SEKOLAH — RESTful V1 (nexa-crm-web)
+// COHORTS — RESTful V1 (Manajemen Periode & Re-entry)
 // ─────────────────────────────────────────────────────────────────────────────
-// GET    /api/v1/sekolah                         — List + filter
-// GET    /api/v1/sekolah/stats                   — Ringkasan per status
-// GET    /api/v1/sekolah/utils/kecamatan-list    — Kecamatan unik
-// GET    /api/v1/sekolah/utils/cro-list          — Daftar CRO aktif
-// GET    /api/v1/sekolah/:id                     — Detail sekolah
-// POST   /api/v1/sekolah                         — Tambah sekolah
-// PUT    /api/v1/sekolah/:id                     — Edit sekolah
-// DELETE /api/v1/sekolah/:id                     — Hapus sekolah
-// PATCH  /api/v1/sekolah/:id/reassign            — Ganti CRO
-// POST   /api/v1/sekolah/:id/aktivitas           — Input aktivitas
-// POST   /api/v1/sekolah/:id/aktivitas-ekstra    — Buat aktivitas ekstra
-// PATCH  /api/v1/aktivitas-ekstra/:aeId/selesai  — Tandai selesai
-// PATCH  /api/v1/aktivitas-ekstra/:aeId/batalkan — Tandai batal
+router.get('/cohorts', cohortCtrl.getAllCohorts);
+router.get('/cohorts/:id', cohortCtrl.getCohortById);
+router.post('/cohorts', cohortCtrl.createCohort);
+router.post('/cohorts/:id/set-active', cohortCtrl.setActiveCohort);
+router.post('/cohorts/:id/archive', cohortCtrl.archiveCohort);
+router.post('/cohorts/:id/re-entry-simulation', cohortCtrl.simulateReEntry);
+router.post('/cohorts/:id/execute-re-entry', cohortCtrl.executeReEntry);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEKOLAH — RESTful V1 Event-Sourcing (nexa-crm-web)
+// ─────────────────────────────────────────────────────────────────────────────
+// GET    /api/v1/sekolah                              — List + filter + intent
+// GET    /api/v1/sekolah/stats                        — Ringkasan per commercial state
+// GET    /api/v1/sekolah/utils/kecamatan-list         — Kecamatan unik
+// GET    /api/v1/sekolah/utils/cro-list               — Daftar CRO aktif
+// GET    /api/v1/sekolah/:id                          — Detail + Event Log
+// POST   /api/v1/sekolah                              — Tambah sekolah
+// PUT    /api/v1/sekolah/:id                          — Edit sekolah
+// DELETE /api/v1/sekolah/:id                          — Hapus sekolah (guard)
+// PATCH  /api/v1/sekolah/:id/reassign                 — Ganti CRO
+// PATCH  /api/v1/sekolah/:id/intent                   — [NEW] Set Intent (High/Mid/Low)
+// POST   /api/v1/sekolah/:id/interactions             — [NEW] Catat Interaksi (Event Log)
+// POST   /api/v1/sekolah/:id/sosialisasi/approve      — [NEW] SosialisasiApproved
+// POST   /api/v1/sekolah/:id/sosialisasi/complete     — [NEW] SosialisasiCompleted
+// POST   /api/v1/sekolah/:id/aktivitas                — [COMPAT] Backward-compatible
+// POST   /api/v1/sekolah/:id/aktivitas-ekstra         — Buat aktivitas ekstra
+// PATCH  /api/v1/aktivitas-ekstra/:aeId/selesai       — Tandai selesai
+// PATCH  /api/v1/aktivitas-ekstra/:aeId/batalkan      — Tandai batal
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/sekolah/stats', sekolahCtrl.getStats);
 router.get('/sekolah/utils/kecamatan-list', sekolahCtrl.getKecamatanList);
@@ -66,6 +90,12 @@ router.post('/sekolah', sekolahCtrl.createSekolah);
 router.put('/sekolah/:id', sekolahCtrl.updateSekolah);
 router.delete('/sekolah/:id', sekolahCtrl.deleteSekolah);
 router.patch('/sekolah/:id/reassign', sekolahCtrl.reassignCRO);
+// Event-Sourcing endpoints (Fase 1)
+router.patch('/sekolah/:id/intent', sekolahCtrl.updateIntent);
+router.post('/sekolah/:id/interactions', sekolahCtrl.logInteraction);
+router.post('/sekolah/:id/sosialisasi/approve', sekolahCtrl.approveSosialisasi);
+router.post('/sekolah/:id/sosialisasi/complete', sekolahCtrl.completeSosialisasi);
+// Backward-compatible
 router.post('/sekolah/:id/aktivitas', sekolahCtrl.addAktivitas);
 router.post('/sekolah/:id/aktivitas-ekstra', sekolahCtrl.createAktivitasEkstra);
 router.patch('/aktivitas-ekstra/:aeId/selesai', sekolahCtrl.selesaikanEkstra);
@@ -82,6 +112,15 @@ router.delete('/siswa/:id', siswaCtrl.deleteSiswa);
 router.post('/siswa/:id/aktivitas', siswaCtrl.addAktivitas);
 router.patch('/siswa/:id/aktivitas/:logId/koreksi', siswaCtrl.koreksiAktivitas);
 router.post('/siswa/batch', siswaCtrl.importBatch);
+// Event-Sourcing Endpoints (Fase 1)
+router.post('/siswa/:id/interactions', siswaCtrl.logInteraction);
+router.post('/siswa/:id/assessments', siswaCtrl.submitAssessment);
+
+// AUDIENCE INTAKE — RESTful V1 (PRD modul-intake-audience)
+router.get('/audience/check', siswaCtrl.checkPhone);
+router.post('/audience', siswaCtrl.createSiswa);
+router.post('/audience/import', siswaCtrl.importBatch);
+
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -205,11 +244,13 @@ router.get('/nurturing/stats', nurturingCtrl.getStats);
 // GET  /api/v1/nurturing/leads              — Daftar leads dalam campaign probing
 router.get('/nurturing/leads', nurturingCtrl.getLeads);
 
-// GET  /api/v1/nurturing/snooze/stats       — Summary cards Snooze Dashboard
+// GET  /api/v1/nurturing/snooze/stats & /nurturing/snooze-stats — Summary cards Snooze Dashboard
 router.get('/nurturing/snooze/stats', nurturingCtrl.getSnoozeStats);
+router.get('/nurturing/snooze-stats', nurturingCtrl.getSnoozeStats);
 
-// GET  /api/v1/nurturing/snooze/leads       — Daftar leads yang sedang di-snooze
+// GET  /api/v1/nurturing/snooze/leads & /nurturing/snooze-leads — Daftar leads yang sedang di-snooze
 router.get('/nurturing/snooze/leads', nurturingCtrl.getSnoozeLeads);
+router.get('/nurturing/snooze-leads', nurturingCtrl.getSnoozeLeads);
 
 // POST /api/v1/nurturing/force-trigger      — Jalankan cron manual (testing)
 router.post('/nurturing/force-trigger', nurturingCtrl.forceTrigger);
@@ -217,10 +258,15 @@ router.post('/nurturing/force-trigger', nurturingCtrl.forceTrigger);
 // POST /api/v1/nurturing/takeover/:id       — Hentikan bot, CRO ambil alih
 router.post('/nurturing/takeover/:id', nurturingCtrl.takeoverLead);
 
-// POST /api/v1/nurturing/snooze/add         — Tambah siswa ke snooze manual
+// POST /api/v1/nurturing/start/:id          — Mulai kampanye probing (NurturingStarted)
+router.post('/nurturing/start/:id', nurturingCtrl.startNurturing);
+
+// POST /api/v1/nurturing/snooze/request & /snooze/add — Command SnoozeRequested
+router.post('/nurturing/snooze/request', nurturingCtrl.requestSnooze);
 router.post('/nurturing/snooze/add', nurturingCtrl.addSnooze);
 
-// DELETE /api/v1/nurturing/snooze/:id       — Hentikan snooze lebih awal
+// POST /api/v1/nurturing/snooze/wakeup & DELETE /snooze/:id — Command Wakeup (SnoozeAborted: Woke Up)
+router.post('/nurturing/snooze/wakeup', nurturingCtrl.wakeupSnooze);
 router.delete('/nurturing/snooze/:id', nurturingCtrl.stopSnooze);
 
 // ─────────────────────────────────────────────────────────────────────────────

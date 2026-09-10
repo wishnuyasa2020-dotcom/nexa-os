@@ -44,6 +44,8 @@ async function getAudience(user, query = {}) {
   const offset = (page - 1) * limit;
   const search = query.search || '';
   const status = query.statusPipeline || '';
+  const commercialState = query.commercialState || '';
+  const schoolId = query.schoolId || query.id_sekolah || '';
 
   let mp = query.period || user.selectedPeriod;
   if (!mp || mp === '-') mp = await getActivePeriod();
@@ -51,9 +53,18 @@ async function getAudience(user, query = {}) {
   const whereParts = ['sp.marketing_period = ?'];
   const params     = [mp];
 
+  // ── Consent Engine Filter (Pilar 2: Etika & Privasi) ──────────────────────
+  // Siswa dengan status Consent: Withdrawn atau Denied otomatis disaring keluar
+  whereParts.push("(ms.opt_in_wa IS NULL OR ms.opt_in_wa NOT IN ('Tidak', 'Denied', 'Withdrawn', 'No'))");
+
   if (user.role === 'CRO') {
     whereParts.push('sp.cro = ?');
     params.push(user.nama);
+  }
+
+  if (schoolId) {
+    whereParts.push('ms.id_sekolah = ?');
+    params.push(schoolId);
   }
 
   if (search) {
@@ -62,9 +73,12 @@ async function getAudience(user, query = {}) {
     params.push(s, s);
   }
 
-  if (status) {
-    whereParts.push('sp.status_terkini = ?');
-    params.push(status);
+  if (commercialState) {
+    whereParts.push('(sp.commercial_state = ? OR sp.status_terkini = ?)');
+    params.push(commercialState, commercialState);
+  } else if (status) {
+    whereParts.push('(sp.status_terkini = ? OR sp.commercial_state = ?)');
+    params.push(status, status);
   }
 
   const where = whereParts.join(' AND ');
@@ -90,6 +104,8 @@ async function getAudience(user, query = {}) {
       IFNULL(sek.nama_sekolah, '-')              AS sekolah,
       IFNULL(ms.wa, '')                          AS phone,
       IFNULL(sp.status_terkini, '')              AS statusPipeline,
+      IFNULL(sp.commercial_state, 'Lead')        AS commercialState,
+      'Granted'                                  AS consent,
       CASE
         WHEN sw.sw_status = 'open' THEN 1
         WHEN sw.last_incoming_ts IS NOT NULL
@@ -301,12 +317,13 @@ async function createBroadcastJob(user, body = {}) {
        END              AS isSwOpen
      FROM master_siswa ms
      LEFT JOIN wa_service_window sw ON (sw.id_siswa = ms.id_siswa OR sw.phone = ms.wa)
-     WHERE ms.id_siswa IN (${placeholders})`,
+     WHERE ms.id_siswa IN (${placeholders})
+       AND (ms.opt_in_wa IS NULL OR ms.opt_in_wa NOT IN ('Tidak', 'Denied', 'Withdrawn', 'No'))`,
     targetIds
   );
 
   if (siswaRows.length === 0) {
-    throw new Error('Tidak ada siswa valid yang ditemukan dari targetIds yang diberikan.');
+    throw new Error('Tidak ada siswa dengan status consent valid yang ditemukan dari targetIds yang diberikan.');
   }
 
   // Tentukan template display untuk header campaign
@@ -372,6 +389,28 @@ async function createBroadcastJob(user, body = {}) {
         [queueRows]
       );
     }
+
+    // ── 3. Catat Event Immutable ke events_log (CQRS Audit Trail) ────────
+    const eventId = `EVT-BC-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    await conn.query(
+      `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, marketing_period, created_at)
+       VALUES (?, 'broadcast', ?, 'BroadcastQueued', ?, ?, ?, NOW())`,
+      [
+        eventId,
+        broadcastId,
+        JSON.stringify({
+          broadcastId,
+          totalTarget: siswaRows.length,
+          templateId: primaryTemplate?.id_template || null,
+          templateNameApi: primaryTemplate?.template_name_api || null,
+          templateDisplayName: primaryTemplate?.nama_template || null,
+          marketingPeriod: mp,
+          targetIds: siswaRows.map(s => s.id_siswa),
+        }),
+        user.nama || user.username || 'System',
+        mp,
+      ]
+    );
 
     await conn.commit();
 

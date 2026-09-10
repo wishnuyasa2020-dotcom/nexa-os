@@ -78,6 +78,28 @@ async function addAktivitas(req, res) {
   }
 }
 
+// ── POST /api/v1/siswa/:id/interactions ───────────────────────────────────
+async function logInteraction(req, res) {
+  try {
+    const data = await svc.logInteraction(req.params.id, req.body, req.user);
+    res.status(201).json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[siswa] logInteraction Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+// ── POST /api/v1/siswa/:id/assessments ────────────────────────────────────
+async function submitAssessment(req, res) {
+  try {
+    const data = await svc.submitAssessment(req.params.id, req.body, req.user);
+    res.status(201).json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[siswa] submitAssessment Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
 // ── POST /api/v1/siswa/batch ───────────────────────────────────────────────
 async function importBatch(req, res) {
   try {
@@ -103,6 +125,19 @@ async function koreksiAktivitas(req, res) {
   }
 }
 
+// ── GET /api/v1/audience/check ─────────────────────────────────────────────
+async function checkPhone(req, res) {
+  try {
+    const phone = req.query.phone || req.query.wa;
+    if (!phone) return res.status(400).json({ status: 'error', message: 'Parameter phone wajib.' });
+    const data = await svc.checkDuplicatePhone(phone);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[siswa] checkPhone Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
 module.exports = {
   getList,
   getDetail,
@@ -111,5 +146,8 @@ module.exports = {
   deleteSiswa,
   addAktivitas,
   koreksiAktivitas,
-  importBatch
+  importBatch,
+  logInteraction,
+  submitAssessment,
+  checkPhone,
 };

@@ -97,6 +97,8 @@ async function getBacklog(user, query = {}) {
       as_t.id_sekolah_nama   AS judul,
       as_t.next_action,
       as_t.status_terkini    AS status,
+      sp.status_terkini      AS commercialState,
+      sp.intent              AS intent,
       sp.pj_sekolah          AS owner,
       as_t.marketing_period,
       DATE_FORMAT(as_t.due_date, '%Y-%m-%d') AS date_val
@@ -125,6 +127,8 @@ async function getBacklog(user, query = {}) {
       asi_t.id_siswa_nama      AS judul,
       asi_t.next_action,
       asi_t.status_terkini     AS status,
+      sp.commercial_state      AS commercialState,
+      sp.intent                AS intent,
       sp.cro                   AS owner,
       asi_t.marketing_period,
       DATE_FORMAT(asi_t.due_date, '%Y-%m-%d') AS date_val
@@ -150,6 +154,8 @@ async function getBacklog(user, query = {}) {
       hv_t.id_siswa_nama     AS judul,
       hv_t.next_action,
       hv_t.status_terkini    AS status,
+      sp.commercial_state      AS commercialState,
+      sp.intent                AS intent,
       sp.cro                 AS owner,
       hv_t.marketing_period,
       DATE_FORMAT(hv_t.due_date, '%Y-%m-%d') AS date_val
@@ -175,6 +181,8 @@ async function getBacklog(user, query = {}) {
       aktivitas           AS judul,
       tujuan_catatan      AS next_action,
       status_aktivitas    AS status,
+      NULL                AS commercialState,
+      NULL                AS intent,
       pj_aktivitas        AS owner,
       marketing_period,
       DATE_FORMAT(tanggal_rencana, '%Y-%m-%d') AS date_val
@@ -290,6 +298,30 @@ async function scheduleTask(user, body = {}) {
       if (match) await conn.query(`UPDATE siswa_periode SET due_date = ?, status_jadwal = 'dijadwalkan' WHERE id_siswa = ? AND marketing_period = ?`, [tanggal, match[1], mp]);
     }
 
+    // ── EVENT-SOURCING: Rekam event WeeklyTaskScheduled ke events_log ──
+    const eventId = uuidv4();
+    await conn.query(
+      `INSERT INTO events_log 
+         (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, marketing_period)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        eventId,
+        prefix === 'as' ? 'sekolah' : prefix === 'asi' || prefix === 'hv' ? 'siswa' : 'ekstra',
+        id,
+        'WeeklyTaskScheduled',
+        JSON.stringify({
+          taskId,
+          idAgenda,
+          judul,
+          tanggal,
+          jenis: prefix,
+          command: 'WeeklyTaskScheduled'
+        }),
+        user.nama || 'System',
+        mp
+      ]
+    );
+
     await conn.commit();
 
     // Trigger Google Calendar Sync (Async, doesn't block the response)
@@ -298,6 +330,10 @@ async function scheduleTask(user, body = {}) {
       summary: judul,
       description: `Task ID: ${idAgenda}\nJenis: ${prefix}`,
       date: tanggal // All-day event based on date
+    }).then(async (calRes) => {
+      if (calRes && calRes.id) {
+        await pool.query('UPDATE weekly_planning SET calendar_event_id = ? WHERE id_agenda = ?', [calRes.id, idAgenda]);
+      }
     }).catch(err => {
       console.error('[Calendar Sync] Failed in scheduleTask:', err.message);
     });
@@ -363,6 +399,29 @@ async function rescheduleTask(user, agendaId, body = {}) {
       if (match) await conn.query(`UPDATE siswa_periode SET due_date = ? WHERE id_siswa = ? AND marketing_period = ?`, [newTanggal, match[1], mp]);
     }
 
+    // ── EVENT-SOURCING: Rekam event WeeklyTaskRescheduled ke events_log ──
+    const eventId = uuidv4();
+    await conn.query(
+      `INSERT INTO events_log 
+         (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, marketing_period)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        eventId,
+        prefix === 'as' ? 'sekolah' : prefix === 'asi' || prefix === 'hv' ? 'siswa' : 'ekstra',
+        agenda.referensi_id,
+        'WeeklyTaskRescheduled',
+        JSON.stringify({
+          agendaId,
+          judul,
+          from_date: agenda.tanggal,
+          to_date: newTanggal,
+          command: 'WeeklyTaskRescheduled'
+        }),
+        user.nama || 'System',
+        mp
+      ]
+    );
+
     await conn.commit();
     return { success: true, newTanggal };
   } catch (err) {
@@ -419,7 +478,38 @@ async function unscheduleTask(user, agendaId) {
       if (match) await conn.query(`UPDATE siswa_periode SET due_date = NULL, status_jadwal = 'Menunggu Penjadwalan' WHERE id_siswa = ? AND marketing_period = ?`, [match[1], mp]);
     }
 
+    // ── EVENT-SOURCING: Rekam event WeeklyTaskUnscheduled ke events_log ──
+    const eventId = uuidv4();
+    await conn.query(
+      `INSERT INTO events_log 
+         (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, marketing_period)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        eventId,
+        prefix === 'as' ? 'sekolah' : prefix === 'asi' || prefix === 'hv' ? 'siswa' : 'ekstra',
+        agenda.referensi_id,
+        'WeeklyTaskUnscheduled',
+        JSON.stringify({
+          agendaId,
+          judul,
+          tanggal_dibatalkan: agenda.tanggal,
+          command: 'WeeklyTaskUnscheduled'
+        }),
+        user.nama || 'System',
+        mp
+      ]
+    );
+
     await conn.commit();
+
+    // Trigger Google Calendar Sync: Hapus acara dari kalender CRO jika ada calendar_event_id
+    if (agenda.calendar_event_id) {
+      const calendarService = require('../calendar/calendar.service');
+      calendarService.deleteEventFromCalendar(user.id, agenda.calendar_event_id).catch(err => {
+        console.error('[Calendar Sync] Failed in unscheduleTask:', err.message);
+      });
+    }
+
     return { success: true };
   } catch (err) {
     await conn.rollback();

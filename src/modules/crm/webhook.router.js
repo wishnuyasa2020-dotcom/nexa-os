@@ -141,6 +141,13 @@ router.post('/:tenantSlug', resolveTenant, async (req, res) => {
         }
       }
 
+      // ── Template Status Updates (Meta Approval Sync) ─────────────────────
+      if (change.field === 'message_template_status_update' && val) {
+        await handleTemplateStatusUpdate(pool, val).catch(e =>
+          console.error(`[Webhook:${req.tenantConfig.tenantId}] templateStatusUpdate error:`, e.message)
+        );
+      }
+
       // ── Pesan Masuk ──────────────────────────────────────────────────────
       if (val.messages && val.messages.length > 0) {
         const contactMeta = (val.contacts || [])[0] || null;
@@ -307,40 +314,140 @@ async function handleIncomingMessage(pool, msg, contactMeta, tenantConfig) {
       );
     }
 
-    // 6. State Machine: Handoff to CRO untuk respons Snooze / Probing
+    // 6. State Machine: Respons Snooze, Consent Withdrawn, atau Positive Wakeup
     if (idSiswa && body) {
-      const lowerBody = body.toLowerCase();
+      const lowerBody = body.toLowerCase().trim();
+
+      // Case A: Penolakan / Pencabutan Izin WhatsApp (Consent Withdrawn)
       if (
-        lowerBody.includes('mau tanya program') ||
-        lowerBody.includes('jangan sekarang') ||
-        lowerBody.includes('hentikan pesan')
+        lowerBody === 'stop' ||
+        lowerBody.includes('hentikan pesan') ||
+        lowerBody.includes('tidak mau') ||
+        lowerBody.includes('jangan kirim wa')
       ) {
-        // Hentikan campaign bot (snooze & probing)
         await conn.query(
-          `UPDATE siswa_nurturing_state 
-           SET is_in_campaign = 0, snooze_until = NULL, updated_at = NOW() 
-           WHERE id_siswa = ?`,
+          `UPDATE master_siswa SET opt_in_wa = 'Withdrawn' WHERE id_siswa = ?`,
           [idSiswa]
         );
-        // Handoff ke CRO
         await conn.query(
-          `UPDATE siswa_periode 
-           SET next_action = 'Follow Up', due_date = NOW() 
-           WHERE id_siswa = ?`,
+          `UPDATE snooze_state SET is_active = 0, snooze_until = NULL, updated_at = NOW() WHERE id_siswa = ?`,
           [idSiswa]
         );
-        // Log Activity
+        await conn.query(
+          `UPDATE siswa_nurturing_state SET is_in_campaign = 0, snooze_until = NULL, updated_at = NOW() WHERE id_siswa = ?`,
+          [idSiswa]
+        );
+        await conn.query(
+          `UPDATE siswa_periode SET status_terkini = 'Tidak Lanjut', next_action = 'Tidak Ada', alasan_tidak_lanjut = 'Consent Withdrawn' WHERE id_siswa = ?`,
+          [idSiswa]
+        );
+        const eventId = `EVT-WH-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+        await conn.query(
+          `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
+           VALUES (?, 'siswa', ?, 'SnoozeAborted', ?, 'System/Webhook', NOW())`,
+          [eventId, idSiswa, JSON.stringify({ id_siswa: idSiswa, reason: 'Consent Withdrawn', raw_message: body })]
+        );
         await conn.query(
           `INSERT INTO nurturing_activity_log (id_siswa, activity_type, result, notes, triggered_by)
-           VALUES (?, 'Webhook Handoff', 'Paused by User Reply', ?, 'system')`,
-          [idSiswa, `Siswa merespons: "${body}". Kampanye otomatis dihentikan dan diserahkan ke CRO.`]
+           VALUES (?, 'Consent Withdrawn', 'Opt-Out via WA', ?, 'webhook')`,
+          [idSiswa, `Siswa membalas: "${body}". Izin dicabut, kampanye dihentikan.`]
         );
-        console.log(`[Webhook:${tenantConfig.tenantId}] Snooze Handoff untuk siswa: ${idSiswa} (Respons: ${body})`);
+        console.log(`[Webhook:${tenantConfig.tenantId}] Consent Withdrawn untuk siswa: ${idSiswa}`);
+      }
+      // Case B: Pemicu Snooze Otomatis (SnoozeRequested — Interval Default 90 Hari)
+      else if (
+        lowerBody.includes('belum waktunya') ||
+        lowerBody.includes('jangan sekarang') ||
+        lowerBody.includes('nanti saja') ||
+        lowerBody.includes('tunda dulu')
+      ) {
+        const snoozeDate = new Date();
+        snoozeDate.setDate(snoozeDate.getDate() + 90);
+        const snoozeUntilStr = snoozeDate.toISOString().split('T')[0];
+
+        await conn.query(
+          `INSERT INTO snooze_state (id_siswa, is_active, snooze_until, snooze_level, alasan, updated_at)
+           VALUES (?, 1, ?, 0, ?, NOW())
+           ON DUPLICATE KEY UPDATE is_active = 1, snooze_until = VALUES(snooze_until), snooze_level = 0, alasan = VALUES(alasan), updated_at = NOW()`,
+          [idSiswa, snoozeUntilStr, `Respons WA: ${body}`]
+        );
+        await conn.query(
+          `UPDATE siswa_nurturing_state SET is_in_campaign = 0, snooze_until = ?, snooze_level = 0, updated_at = NOW() WHERE id_siswa = ?`,
+          [snoozeDate, idSiswa]
+        );
+        await conn.query(
+          `UPDATE siswa_periode SET status_terkini = 'Data Masuk', next_action = 'Snooze', due_date = NULL WHERE id_siswa = ?`,
+          [idSiswa]
+        );
+        const eventId = `EVT-WH-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+        await conn.query(
+          `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
+           VALUES (?, 'siswa', ?, 'SnoozeRequested', ?, 'System/Webhook', NOW())`,
+          [eventId, idSiswa, JSON.stringify({ id_siswa: idSiswa, interval_days: 90, snooze_until: snoozeUntilStr, trigger: 'webhook', reason: body })]
+        );
+        await conn.query(
+          `INSERT INTO nurturing_activity_log (id_siswa, activity_type, result, notes, triggered_by)
+           VALUES (?, 'Auto Snooze Webhook', 'Snooze 90 Hari', ?, 'webhook')`,
+          [idSiswa, `Siswa merespons: "${body}". Dijadwalkan bangun pada ${snoozeUntilStr}.`]
+        );
+        console.log(`[Webhook:${tenantConfig.tenantId}] SnoozeRequested (90 hari) untuk siswa: ${idSiswa}`);
+      }
+      // Case C: Respons Intensi Positif / Bertanya di Tengah Masa Tunggu (SnoozeAborted: Woke Up)
+      else if (
+        lowerBody.includes('mau tanya') ||
+        lowerBody.includes('berminat') ||
+        lowerBody.includes('info') ||
+        lowerBody.includes('daftar') ||
+        lowerBody.includes('siap')
+      ) {
+        await conn.query(
+          `UPDATE snooze_state SET is_active = 0, snooze_until = NULL, updated_at = NOW() WHERE id_siswa = ?`,
+          [idSiswa]
+        );
+        await conn.query(
+          `UPDATE siswa_nurturing_state SET is_in_campaign = 0, snooze_until = NULL, updated_at = NOW() WHERE id_siswa = ?`,
+          [idSiswa]
+        );
+        await conn.query(
+          `UPDATE siswa_periode SET next_action = 'Follow Up', due_date = NOW() WHERE id_siswa = ?`,
+          [idSiswa]
+        );
+        const eventId = `EVT-WH-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+        await conn.query(
+          `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
+           VALUES (?, 'siswa', ?, 'SnoozeAborted', ?, 'System/Webhook', NOW())`,
+          [eventId, idSiswa, JSON.stringify({ id_siswa: idSiswa, reason: 'Woke Up', trigger: 'inbound_interest', raw_message: body })]
+        );
+        await conn.query(
+          `INSERT INTO nurturing_activity_log (id_siswa, activity_type, result, notes, triggered_by)
+           VALUES (?, 'Webhook Handoff', 'Woke Up by User Reply', ?, 'system')`,
+          [idSiswa, `Siswa merespons minat: "${body}". Snooze dihentikan dan diserahkan ke CRO.`]
+        );
+        console.log(`[Webhook:${tenantConfig.tenantId}] Snooze Woke Up untuk siswa: ${idSiswa} (Respons: ${body})`);
       }
     }
 
     await conn.commit();
     console.log(`[Webhook:${tenantConfig.tenantId}] Pesan disimpan — conv:${convId}, dari:${fromPhone}`);
+
+    // [PRD LIVE CHAT §5 — Event-Sourcing CQRS] Rekam 'MessageReceived' ke events_log
+    // Tujuan: Rule Engine (Snooze wakeup dll.) dapat bereaksi real-time tanpa polling chat_messages.
+    // Dilakukan SETELAH commit agar tidak rollback jika insert events_log gagal.
+    if (idSiswa) {
+      const evtId = `EVT-WH-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      const evtPayload = JSON.stringify({
+        conv_id:      convId,
+        id_siswa:     idSiswa,
+        from_phone:   fromPhone,
+        msg_type:     msgType,
+        body_preview: body ? body.substring(0, 100) : `[${msgType}]`,
+      });
+      pool.query(
+        `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
+         VALUES (?, 'siswa', ?, 'MessageReceived', ?, 'System/WhatsApp', NOW())`,
+        [evtId, String(idSiswa), evtPayload]
+      ).catch(e => console.warn(`[Webhook:${tenantConfig.tenantId}] events_log MessageReceived insert failed (non-fatal):`, e.message));
+    }
 
     // 7. Trigger Web Push Notification
     try {
@@ -404,6 +511,38 @@ async function handleStatusUpdate(pool, statusEvt) {
     }
   } catch (err) {
     console.error(`[Webhook] DB Error on Status Update:`, err.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HANDLER: Pembaruan Status Template (Approved/Rejected/Paused) dari Meta
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleTemplateStatusUpdate(pool, val) {
+  const event = val.event || val.status;
+  const templateName = val.message_template_name || val.name;
+  const templateId = val.message_template_id || val.id;
+
+  if (!templateName && !templateId) return;
+
+  const validStatus = event ? event.toUpperCase() : 'UNKNOWN';
+  console.log(`[Webhook BYOW] Template status update: ${templateName || templateId} -> ${validStatus}`);
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `UPDATE wa_templates
+       SET meta_status = ?,
+           status_meta = ?,
+           meta_template_id = COALESCE(?, meta_template_id),
+           meta_status_updated_at = NOW(),
+           last_updated = NOW()
+       WHERE template_name_api = ? OR id_template = ? OR meta_template_id = ?`,
+      [validStatus, validStatus, templateId || null, templateName || '', templateName || '', templateId || '']
+    );
+  } catch (err) {
+    console.error('[Webhook BYOW] Error update template status:', err.message);
+  } finally {
+    conn.release();
   }
 }
 

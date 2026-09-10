@@ -5,6 +5,7 @@
  * Service RESTful Modul Siswa — nexa-crm-web integration
  */
 
+const crypto = require('crypto');
 const { pool, mainPool } = require('../../config/database');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -37,7 +38,7 @@ async function _incrementUsedSiswa(tenantId, incrementCount) {
   await mainPool.query("UPDATE tenants SET used_siswa = used_siswa + ? WHERE tenant_id = ?", [incrementCount, tenantId]);
 }
 
-// Konstanta Hasil Aktivitas (dari modul-siswa.md)
+// Konstanta Hasil Aktivitas (legacy - backward compat)
 const HASIL_AKTIVITAS_SISWA = {
   'Screening Belum Berhasil':     { status: 'Data Masuk',       nextAction: 'Screening' },
   'Screening Dihentikan':         { status: 'Tidak Lanjut',     nextAction: 'Tidak Ada', isTerminal: true, requiresAlasan: true },
@@ -51,6 +52,21 @@ const HASIL_AKTIVITAS_SISWA = {
   'Ditunda':                      { status: 'Prospek Aktif',    nextAction: 'Follow Up' },
   'Tidak Berminat':               { status: 'Tidak Lanjut',     nextAction: 'Tidak Ada', isTerminal: true, requiresAlasan: true },
   'Tdk Memenuhi Syarat':          { status: 'Tidak Lanjut',     nextAction: 'Tidak Ada', isTerminal: true, requiresAlasan: true },
+};
+
+// ── Event-Sourcing: Commercial State Pipeline (Fase 1) ────────────────────────
+const COMMERCIAL_STATE_PIPELINE = ['Audience', 'Known', 'Lead', 'Prospect', 'Opportunity', 'Registered Opportunity', 'Customer'];
+
+// Outcome → efek pada commercial_state dan intent
+const INTERACTION_OUTCOME_MAP = {
+  'Connected':              { intentSignal: 'Mid',  stateEffect: null },
+  'No Response':            { intentSignal: null,   stateEffect: null },
+  'Information Delivered':  { intentSignal: 'Mid',  stateEffect: null },
+  'Interest Observed':      { intentSignal: 'High', stateEffect: null },
+  'Commitment Proposed':    { intentSignal: 'High', stateEffect: null },
+  'Commitment Confirmed':   { intentSignal: 'High', stateEffect: null },
+  'Objection Identified':   { intentSignal: 'Low',  stateEffect: null },
+  'Next Action Agreed':     { intentSignal: 'Mid',  stateEffect: null },
 };
 
 function hitungPrioritas(minatAwal, rencanaLulus) {
@@ -71,7 +87,14 @@ async function getActivePeriod() {
 }
 
 function cleanPhone(wa) {
-  return wa ? String(wa).replace(/[^0-9]/g, '') : '';
+  if (!wa) return '';
+  let clean = String(wa).replace(/\D/g, '');
+  if (clean.startsWith('08')) {
+    clean = '62' + clean.slice(1);
+  } else if (clean.startsWith('8')) {
+    clean = '62' + clean;
+  }
+  return clean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -96,9 +119,11 @@ async function listSiswa(user, query = {}) {
     params.push(query.cro);
   }
 
-  if (query.status) { whereParts.push('sp.status_terkini = ?'); params.push(query.status); }
-  if (query.kelas) { whereParts.push('mk.nama_kelas = ?'); params.push(query.kelas); }
-  if (query.prioritas) { whereParts.push('sp.prioritas = ?'); params.push(query.prioritas); }
+  if (query.status)          { whereParts.push('sp.status_terkini = ?');   params.push(query.status); }
+  if (query.commercialState) { whereParts.push('sp.commercial_state = ?'); params.push(query.commercialState); }
+  if (query.intent)          { whereParts.push('sp.intent = ?');            params.push(query.intent); }
+  if (query.kelas)           { whereParts.push('mk.nama_kelas = ?');        params.push(query.kelas); }
+  if (query.prioritas)       { whereParts.push('sp.prioritas = ?');         params.push(query.prioritas); }
   
   if (query.search) {
     const s = `%${query.search}%`;
@@ -129,6 +154,9 @@ async function listSiswa(user, query = {}) {
       IFNULL(mk.nama_kelas, '') as kelas,
       IFNULL(sp.cro, '') as cro,
       IFNULL(sp.status_terkini, '') as status,
+      IFNULL(sp.commercial_state, 'Lead') as commercialState,
+      IFNULL(sp.intent, '') as intent,
+      IFNULL(sp.priority_score, 0) as priorityScore,
       IFNULL(sp.next_action, '') as nextAction,
       IFNULL(sp.prioritas, '') as prioritas,
       IFNULL(DATE_FORMAT(sp.due_date, '%Y-%m-%d'), '') as dueDate,
@@ -139,7 +167,7 @@ async function listSiswa(user, query = {}) {
     LEFT JOIN master_kelas mk ON ms.kelas_id = mk.id
     LEFT JOIN master_sekolah sek ON ms.id_sekolah = sek.id_sekolah
     WHERE ${where}
-    ORDER BY sp.due_date ASC
+    ORDER BY sp.priority_score DESC, sp.due_date ASC
     LIMIT ${pageSize} OFFSET ${offset}
   `;
 
@@ -175,9 +203,16 @@ async function detailSiswa(id, user, query = {}) {
     throw new Error('Unauthorized: Siswa ini bukan dalam tanggung jawab Anda.');
   }
 
-  // Get log aktivitas
+  // Get event log (append-only, newest first)
   const [logs] = await pool.query(
-    "SELECT *, DATE_FORMAT(tanggal, '%Y-%m-%d') as tanggal FROM aktivitas_siswa WHERE id_siswa = ? ORDER BY tanggal DESC, created_at DESC",
+    `SELECT 
+      id, jenis_aktivitas, tanggal, hasil_aktivitas, status_sebelum, status_sesudah,
+      next_action, due_date, catatan, alasan_tidak_lanjut, pj_cro,
+      IFNULL(event_type, 'InteractionLogged') as event_type,
+      IFNULL(channel, 'WhatsApp') as channel,
+      DATE_FORMAT(tanggal, '%Y-%m-%d') as tanggal,
+      DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') as created_at
+    FROM aktivitas_siswa WHERE id_siswa = ? ORDER BY created_at DESC`,
     [id]
   );
 
@@ -255,26 +290,93 @@ async function tambahSiswa(data, user) {
       }
     }
 
+    // Handle consent WA
+    const optInWa = (data.opt_in_wa === 'Ya' || data.consent_wa === true || data.consent_wa === 'true' || data.consent_wa === 'Ya') ? 'Ya' : 'Belum';
+
     // Insert master_siswa
     await conn.query(`
       INSERT INTO master_siswa 
-      (id_siswa, id_sekolah, nama_lengkap, wa, bsuid, kelas_id, minat_awal, rencana_lulus)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [idSiswa, data.id_sekolah, data.nama_lengkap, waClean || null, data.bsuid || null, kelasId || null, data.minat_awal, data.rencana_lulus]);
+      (id_siswa, id_sekolah, nama_lengkap, wa, bsuid, kelas_id, minat_awal, rencana_lulus, opt_in_wa)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [idSiswa, data.id_sekolah, data.nama_lengkap, waClean || null, data.bsuid || null, kelasId || null, data.minat_awal, data.rencana_lulus, optInWa]);
 
-    // Insert siswa_periode (default Data Masuk)
+    // Insert siswa_periode (default Data Masuk, commercial_state Known)
+    const idRecord = `SWP-${Date.now().toString().slice(-6)}-${Math.floor(Math.random()*1000)}`;
     await conn.query(`
       INSERT INTO siswa_periode 
-      (id_siswa, nama_siswa, marketing_period, status_terkini, next_action, due_date, cro, prioritas)
-      VALUES (?, ?, ?, ?, ?, DATE_ADD(CURDATE(), INTERVAL 1 DAY), ?, ?)
-    `, [idSiswa, data.nama_lengkap, mp, 'Data Masuk', 'Screening', pjCro, prioritas]);
+      (id_record, id_siswa, nama_siswa, marketing_period, status_terkini, commercial_state, next_action, due_date, cro, prioritas)
+      VALUES (?, ?, ?, ?, 'Data Masuk', 'Known', 'Screening', DATE_ADD(CURDATE(), INTERVAL 1 DAY), ?, ?)
+    `, [idRecord, idSiswa, data.nama_lengkap, mp, pjCro, prioritas]);
+
+    // ── Event-Sourcing: LeadAddedManually ──
+    const evtLeadId = `EVT-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    await conn.query(`
+      INSERT INTO events_log 
+        (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, marketing_period)
+      VALUES (?, 'Siswa', ?, 'LeadAddedManually', ?, ?, ?)
+    `, [
+      evtLeadId,
+      idSiswa,
+      JSON.stringify({
+        id_siswa: idSiswa,
+        nama_lengkap: data.nama_lengkap,
+        wa: waClean || null,
+        id_sekolah: data.id_sekolah,
+        opt_in_wa: optInWa,
+        added_by: user.nama || 'CRO'
+      }),
+      user.nama || 'CRO',
+      mp
+    ]);
+
+    // ── Event-Sourcing: ConsentOptInRecorded jika opt_in_wa = 'Ya' ──
+    if (optInWa === 'Ya') {
+      const evtConsentId = `EVT-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+      await conn.query(`
+        INSERT INTO events_log 
+          (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, marketing_period)
+        VALUES (?, 'Siswa', ?, 'ConsentOptInRecorded', ?, ?, ?)
+      `, [
+        evtConsentId,
+        idSiswa,
+        JSON.stringify({
+          id_siswa: idSiswa,
+          wa: waClean || null,
+          consent: 'Granted',
+          channel: 'Manual Input CRO',
+          recorded_by: user.nama || 'CRO'
+        }),
+        user.nama || 'CRO',
+        mp
+      ]);
+    }
+
+    // ── Event-Sourcing: StudentAssignedToCro jika pjCro diisi ──
+    if (pjCro) {
+      const evtAssignId = `EVT-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+      await conn.query(`
+        INSERT INTO events_log 
+          (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, marketing_period)
+        VALUES (?, 'Siswa', ?, 'StudentAssignedToCro', ?, ?, ?)
+      `, [
+        evtAssignId,
+        idSiswa,
+        JSON.stringify({
+          id_siswa: idSiswa,
+          cro: pjCro,
+          assigned_by: user.nama || 'System'
+        }),
+        user.nama || 'System',
+        mp
+      ]);
+    }
 
     await conn.commit();
 
     // Increment Kuota setelah sukses
     await _incrementUsedSiswa(tenantId, 1).catch(e => console.error("Gagal increment used_siswa:", e));
 
-    return { id: idSiswa, prioritas, status: 'Data Masuk' };
+    return { id: idSiswa, prioritas, status: 'Data Masuk', commercialState: 'Known', optInWa };
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -482,7 +584,11 @@ async function koreksiAktivitas(idSiswa, logId, data, user) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function importBatch(dataBatch, croName, user) {
   if (!Array.isArray(dataBatch) || dataBatch.length === 0) throw new Error('Data batch kosong.');
-  if (!croName) throw new Error('CRO penanggung jawab wajib diisi saat import.');
+  
+  // CRO bersifat opsional (jika kosong, masuk antrian Unassigned sesuai PRD modul-intake-audience)
+  const assignedCro = (croName && typeof croName === 'string' && croName.trim() !== '' && croName.toLowerCase() !== 'unassigned') 
+    ? croName.trim() 
+    : null;
 
   // ── Validasi Kuota Ingestion Batch ──
   const { tenantId } = await _checkSiswaLimits(dataBatch.length);
@@ -527,8 +633,8 @@ async function importBatch(dataBatch, croName, user) {
         }
       }
 
-      // ── Validasi: 1 Kelas 1 CRO ──
-      if (kelasId && croName) {
+      // ── Validasi: 1 Kelas 1 CRO (jika ada assigned CRO) ──
+      if (kelasId && assignedCro) {
         const [existingCroRow] = await conn.query(`
           SELECT sp.cro 
           FROM siswa_periode sp
@@ -539,7 +645,7 @@ async function importBatch(dataBatch, croName, user) {
         
         if (existingCroRow.length > 0) {
           const existingCro = existingCroRow[0].cro;
-          if (existingCro !== croName) {
+          if (existingCro && existingCro !== assignedCro) {
             skipCount++; continue; // Kelas ini sudah milik CRO lain, skip row ini
           }
         }
@@ -547,18 +653,45 @@ async function importBatch(dataBatch, croName, user) {
 
       const idSiswa = `STD-${Date.now().toString().slice(-6)}-${Math.floor(Math.random()*1000)}`;
       const prioritas = hitungPrioritas(row.minat_awal || 'Ragu', row.rencana_lulus || 'Belum Tahu');
+      
+      // Consent Engine: cek apakah kolom consent_wa ada
+      const isConsent = row.consent_wa === true || row.consent_wa === 'true' || row.consent_wa === 'Ya' || row.opt_in_wa === 'Ya';
+      const optIn = isConsent ? 'Ya' : 'Belum';
 
       await conn.query(`
-        INSERT INTO master_siswa (id_siswa, id_sekolah, nama_lengkap, wa, bsuid, kelas_id, minat_awal, rencana_lulus)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `, [idSiswa, row.id_sekolah, row.nama_lengkap, waClean || null, row.bsuid || null, kelasId || null, row.minat_awal || 'Ragu', row.rencana_lulus || 'Belum Tahu']);
+        INSERT INTO master_siswa (id_siswa, id_sekolah, nama_lengkap, wa, bsuid, kelas_id, minat_awal, rencana_lulus, opt_in_wa)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [idSiswa, row.id_sekolah, row.nama_lengkap, waClean || null, row.bsuid || null, kelasId || null, row.minat_awal || 'Ragu', row.rencana_lulus || 'Belum Tahu', optIn]);
 
+      const idRecord = `SWP-${Date.now().toString().slice(-6)}-${Math.floor(Math.random()*1000)}`;
       await conn.query(`
-        INSERT INTO siswa_periode (id_siswa, nama_siswa, marketing_period, status_terkini, next_action, due_date, cro, prioritas)
-        VALUES (?, ?, ?, ?, ?, DATE_ADD(CURDATE(), INTERVAL 1 DAY), ?, ?)
-      `, [idSiswa, row.nama_lengkap, mp, 'Data Masuk', 'Screening', croName, prioritas]);
+        INSERT INTO siswa_periode (id_record, id_siswa, nama_siswa, marketing_period, status_terkini, commercial_state, next_action, due_date, cro, prioritas)
+        VALUES (?, ?, ?, ?, 'Data Masuk', 'Known', 'Screening', DATE_ADD(CURDATE(), INTERVAL 1 DAY), ?, ?)
+      `, [idRecord, idSiswa, row.nama_lengkap, mp, assignedCro, prioritas]);
 
       successCount++;
+    }
+
+    // ── Event-Sourcing: LeadsBulkImported ──
+    if (successCount > 0) {
+      const evtBatchId = `EVT-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+      await conn.query(`
+        INSERT INTO events_log 
+          (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, marketing_period)
+        VALUES (?, 'Siswa', ?, 'LeadsBulkImported', ?, ?, ?)
+      `, [
+        evtBatchId,
+        `BATCH-${Date.now()}`,
+        JSON.stringify({
+          totalSubmitted: dataBatch.length,
+          successCount,
+          skipCount,
+          assignedCro,
+          imported_by: user.nama || 'Admin'
+        }),
+        user.nama || 'Admin',
+        mp
+      ]);
     }
 
     await conn.commit();
@@ -577,6 +710,170 @@ async function importBatch(dataBatch, croName, user) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/audience/check — Cek Duplikasi Nomor WhatsApp
+// ─────────────────────────────────────────────────────────────────────────────
+async function checkDuplicatePhone(phone) {
+  const clean = cleanPhone(phone);
+  if (!clean) return { exists: false, siswa: null };
+
+  const localVariant = clean.startsWith('62') ? '0' + clean.slice(2) : clean;
+
+  const [rows] = await pool.query(
+    `SELECT ms.id_siswa, ms.nama_lengkap, IFNULL(sek.nama_sekolah, '-') as nama_sekolah, ms.wa
+     FROM master_siswa ms
+     LEFT JOIN master_sekolah sek ON ms.id_sekolah = sek.id_sekolah
+     WHERE ms.wa = ? OR ms.wa = ? LIMIT 1`,
+    [clean, localVariant]
+  );
+  if (rows.length > 0) {
+    return { exists: true, siswa: rows[0] };
+  }
+  return { exists: false, siswa: null };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/siswa/:id/interactions — Catat Interaksi (Event-Sourcing)
+// ─────────────────────────────────────────────────────────────────────────────
+async function logInteraction(id, data, user) {
+  let mp = user.selectedPeriod;
+  if (!mp || mp === '-') mp = await getActivePeriod();
+
+  const [periodeRows] = await pool.query(
+    'SELECT * FROM siswa_periode WHERE id_siswa = ? AND marketing_period = ?',
+    [id, mp]
+  );
+  if (periodeRows.length === 0) throw new Error('Siswa tidak terdaftar di periode aktif ini.');
+
+  const { outcome, channel, catatan, due_date } = data;
+  if (!outcome) throw new Error('Outcome interaksi wajib diisi.');
+
+  const outcomeConfig = INTERACTION_OUTCOME_MAP[outcome];
+  if (!outcomeConfig) throw new Error(`Outcome '${outcome}' tidak dikenali.`);
+
+  const pjCro = user.role === 'CRO' ? user.nama : (data.pj_cro || user.nama);
+  const currentIntent = periodeRows[0].intent;
+
+  // Kalkulasi intent baru (tidak menurunkan jika sinyal lebih rendah dari High)
+  const intentPriority = { High: 3, Mid: 2, Low: 1, null: 0 };
+  let newIntent = currentIntent;
+  if (outcomeConfig.intentSignal) {
+    const currentPrio = intentPriority[currentIntent] || 0;
+    const newPrio = intentPriority[outcomeConfig.intentSignal] || 0;
+    if (newPrio >= currentPrio) newIntent = outcomeConfig.intentSignal;
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Insert ke aktivitas_siswa dengan event_type dan channel baru
+    await conn.query(`
+      INSERT INTO aktivitas_siswa
+        (id_siswa, jenis_aktivitas, tanggal, hasil_aktivitas, status_sebelum, status_sesudah,
+         next_action, due_date, catatan, pj_cro, event_type, channel)
+      VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, 'InteractionLogged', ?)
+    `, [
+      id, channel || 'WhatsApp', outcome,
+      periodeRows[0].status_terkini, periodeRows[0].status_terkini,
+      data.next_action || periodeRows[0].next_action,
+      due_date || null, catatan || null, pjCro, channel || 'WhatsApp'
+    ]);
+
+    // Update intent dan due_date di siswa_periode
+    await conn.query(
+      'UPDATE siswa_periode SET intent = ?, due_date = IFNULL(?, due_date) WHERE id_siswa = ? AND marketing_period = ?',
+      [newIntent, due_date || null, id, mp]
+    );
+
+    await conn.commit();
+    return { eventType: 'InteractionLogged', outcome, intent: newIntent };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/siswa/:id/assessments — Submit FNAR Assessment (Event-Sourcing)
+// ─────────────────────────────────────────────────────────────────────────────
+async function submitAssessment(id, data, user) {
+  let mp = user.selectedPeriod;
+  if (!mp || mp === '-') mp = await getActivePeriod();
+
+  const [periodeRows] = await pool.query(
+    'SELECT * FROM siswa_periode WHERE id_siswa = ? AND marketing_period = ?',
+    [id, mp]
+  );
+  if (periodeRows.length === 0) throw new Error('Siswa tidak terdaftar di periode aktif ini.');
+
+  const { fit, need, ability, readiness, catatan_fit, catatan_need, catatan_ability, catatan_readiness } = data;
+  const pjCro = user.role === 'CRO' ? user.nama : (data.pj_cro || user.nama);
+
+  // Evaluasi FNAR — semua harus 'pass' untuk jadi Prospect
+  const allPass = (fit === 'pass') && (need === 'pass') && (ability === 'pass') && (readiness === 'pass');
+  const anyFail = (fit === 'fail') || (ability === 'fail'); // Hard Gate: Fit & Ability tidak bisa dinego
+
+  let newState = periodeRows[0].commercial_state || 'Lead';
+  let eventType = 'QualificationAssessmentSubmitted';
+  let newStatus = periodeRows[0].status_terkini;
+
+  if (anyFail) {
+    newState = 'Disqualified';
+    newStatus = 'Tidak Lanjut';
+    eventType = 'LeadDisqualified';
+  } else if (allPass) {
+    newState = 'Prospect';
+    newStatus = 'Prospek Aktif';
+    eventType = 'StateTransitionedToProspect';
+  }
+
+  const catatanPayload = JSON.stringify({ fit: catatan_fit, need: catatan_need, ability: catatan_ability, readiness: catatan_readiness });
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Insert event ke aktivitas_siswa
+    await conn.query(`
+      INSERT INTO aktivitas_siswa
+        (id_siswa, jenis_aktivitas, tanggal, hasil_aktivitas, status_sebelum, status_sesudah,
+         next_action, catatan, pj_cro, event_type, channel)
+      VALUES (?, 'Assessment FNAR', CURDATE(), ?, ?, ?, ?, ?, ?, ?, 'Form')
+    `, [
+      id,
+      allPass ? 'Kualifikasi Lulus' : (anyFail ? 'Kualifikasi Gagal' : 'Kualifikasi Parsial'),
+      periodeRows[0].status_terkini, newStatus,
+      allPass ? 'Konsultasi' : 'Follow Up',
+      catatanPayload, pjCro, eventType
+    ]);
+
+    // Update proyeksi commercial_state
+    await conn.query(
+      `UPDATE siswa_periode 
+       SET commercial_state = ?, status_terkini = ?, intent = 'High',
+           next_action = ?, alasan_tidak_lanjut = ?
+       WHERE id_siswa = ? AND marketing_period = ?`,
+      [
+        newState, newStatus,
+        allPass ? 'Konsultasi' : 'Follow Up',
+        anyFail ? 'Tidak memenuhi syarat FNAR (Fit/Ability)' : null,
+        id, mp
+      ]
+    );
+
+    await conn.commit();
+    return { eventType, commercialState: newState, allPass, anyFail };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
 module.exports = {
   listSiswa,
   detailSiswa,
@@ -585,5 +882,8 @@ module.exports = {
   hapusSiswa,
   inputAktivitas,
   koreksiAktivitas,
-  importBatch
+  importBatch,
+  logInteraction,
+  submitAssessment,
+  checkDuplicatePhone,
 };

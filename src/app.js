@@ -67,6 +67,7 @@ app.use('/api/crm', crmRoutes);               // ← backward-compat
 
 // Public routes (No JWT required)
 app.use('/api/public', publicRoutes);
+app.use('/public', publicRoutes);
 
 // Webhook routes — Legacy single-tenant (backward-compat)
 app.use('/api/webhook', webhookRoutes);

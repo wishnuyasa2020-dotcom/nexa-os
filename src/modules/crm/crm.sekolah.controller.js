@@ -2,7 +2,7 @@
 
 /**
  * crm.sekolah.controller.js
- * Controller RESTful untuk Modul Sekolah — nexa-crm-web integration
+ * Controller RESTful Modul Sekolah — Event-Sourcing Fase 1 (Ontologi Nexa OS)
  */
 
 const svc = require('./crm.sekolah.service');
@@ -93,7 +93,6 @@ async function deleteSekolah(req, res) {
   } catch (err) {
     console.error('[sekolah] deleteSekolah Error:', err);
 
-    // Return structured error agar frontend bisa beda handling
     const blockedMap = {
       'BLOCKED_HAS_ACTIVITY':  { code: 403, reason: 'has_activity' },
       'BLOCKED_LEAD_CAPTURED': { code: 403, reason: 'lead_captured' },
@@ -119,7 +118,56 @@ async function reassignCRO(req, res) {
   }
 }
 
-// ── POST /api/v1/sekolah/:id/aktivitas ──────────────────────────────────────
+// ── POST /api/v1/sekolah/:id/interactions ────────────────────────────────────
+// EVENT-SOURCING: Catat Interaksi (Menghasilkan InteractionLogged, SosialisasiRejected, dsb)
+async function logInteraction(req, res) {
+  try {
+    const data = await svc.logInteraction(req.params.id, req.body, req.user);
+    res.status(201).json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[sekolah] logInteraction Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+// ── POST /api/v1/sekolah/:id/sosialisasi/approve ────────────────────────────
+// EVENT: SosialisasiApproved (Wajib tanggal sosialisasi)
+async function approveSosialisasi(req, res) {
+  try {
+    const data = await svc.approveSosialisasi(req.params.id, req.body, req.user);
+    res.status(201).json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[sekolah] approveSosialisasi Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+// ── POST /api/v1/sekolah/:id/sosialisasi/complete ───────────────────────────
+// EVENT: SosialisasiCompleted
+async function completeSosialisasi(req, res) {
+  try {
+    const data = await svc.completeSosialisasi(req.params.id, req.body, req.user);
+    res.status(201).json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[sekolah] completeSosialisasi Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+// ── PATCH /api/v1/sekolah/:id/intent ────────────────────────────────────────
+// Update Intent Level (High / Mid / Low)
+async function updateIntent(req, res) {
+  try {
+    const { intent } = req.body;
+    const data = await svc.updateIntent(req.params.id, intent, req.user);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[sekolah] updateIntent Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+// ── POST /api/v1/sekolah/:id/aktivitas (BACKWARD COMPAT) ────────────────────
 async function addAktivitas(req, res) {
   try {
     const data = await svc.inputAktivitas(req.params.id, req.body, req.user);
@@ -173,6 +221,12 @@ module.exports = {
   updateSekolah,
   deleteSekolah,
   reassignCRO,
+  // Event-Sourcing handlers (new)
+  logInteraction,
+  approveSosialisasi,
+  completeSosialisasi,
+  updateIntent,
+  // Backward-compatible
   addAktivitas,
   createAktivitasEkstra,
   selesaikanEkstra,

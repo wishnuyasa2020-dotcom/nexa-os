@@ -17,13 +17,41 @@
  *   agar dua request bersamaan tidak mengambil keputusan routing yang berbeda.
  */
 
-const { pool } = require('../../../config/database');
+const { pool, mainPool, tenantStorage } = require('../../../config/database');
 
 const axios    = require('axios');
 const FormData = require('form-data');
 const fs       = require('fs');
 const path     = require('path');
 const os       = require('os');
+
+// ── Helper: baca credentials BYOW dari nexamain.tenants ─────────────────────
+async function _getTenantWaCredentials() {
+  const tenantId = tenantStorage ? tenantStorage.getStore() : null;
+
+  if (mainPool && tenantId) {
+    try {
+      const [rows] = await mainPool.query(
+        'SELECT whatsapp_phone_id, whatsapp_waba_id, whatsapp_access_token FROM tenants WHERE tenant_id = ? LIMIT 1',
+        [tenantId]
+      );
+      if (rows.length > 0 && rows[0].whatsapp_access_token) {
+        return {
+          token:   rows[0].whatsapp_access_token,
+          wabaId:  rows[0].whatsapp_waba_id,
+          phoneId: rows[0].whatsapp_phone_id,
+        };
+      }
+    } catch (e) {
+      console.warn('[Chat] Gagal baca credentials dari DB tenant, fallback ke .env:', e.message);
+    }
+  }
+
+  const token   = process.env.WA_ACCESS_TOKEN;
+  const wabaId  = process.env.WA_WABA_ID;
+  const phoneId = process.env.WA_PHONE_ID || process.env.WA_PHONE_NUMBER_ID;
+  return { token, wabaId, phoneId };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/chats — Daftar percakapan aktif
@@ -53,20 +81,23 @@ async function getConversationList(user, query = {}) {
   }
 
   if (user.role === 'CRO') {
-    // CRO hanya melihat konversasi yang terkait dengan siswa mereka
+    // CRO hanya melihat konversasi milik siswa yang di-assign kepadanya.
+    // [PRD LIVE CHAT §2.1] — Filter via Read-Model Projection student_current_state
+    // untuk performa optimal (pre-computed, tidak butuh JOIN ke siswa_periode).
     whereParts.push(`EXISTS (
-      SELECT 1 FROM siswa_periode sp
-      WHERE sp.id_siswa = c.id_siswa AND sp.cro = ?
+      SELECT 1 FROM student_current_state scs
+      WHERE scs.id_siswa = c.id_siswa AND scs.cro_assignee = ?
     )`);
     params.push(user.nama);
   } else if (user.role === 'Chief CRO') {
-    // Chief CRO melihat chat orphaned (id_siswa IS NULL) 
-    // DAN chat milik CRO bawahannya ATAU miliknya sendiri
+    // Chief CRO: visibilitas hibrida.
+    // Bisa melihat: (1) orphaned chats, (2) milik diri sendiri, (3) milik CRO bawahannya.
+    // [PRD LIVE CHAT §2.2]
     whereParts.push(`(
       c.id_siswa IS NULL OR EXISTS (
-        SELECT 1 FROM siswa_periode sp
-        WHERE sp.id_siswa = c.id_siswa AND (
-          sp.cro = ? OR sp.cro IN (
+        SELECT 1 FROM student_current_state scs
+        WHERE scs.id_siswa = c.id_siswa AND (
+          scs.cro_assignee = ? OR scs.cro_assignee IN (
             SELECT nama FROM users WHERE supervisor_id = ?
           )
         )
@@ -392,6 +423,25 @@ async function sendMessage(convId, payload, user) {
       );
     }
 
+    // 8. [PRD LIVE CHAT §5 — Event-Sourcing CQRS] Rekam event 'MessageSent'
+    //    Hal ini memungkinkan Rule Engine (misal: Snooze auto-wakeup) bereaksi
+    //    terhadap aktivitas percakapan tanpa polling tabel chat_messages.
+    if (waMessageId) {
+      const eventId = `EVT-CHAT-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      const eventPayload = JSON.stringify({
+        conv_id:  convId,
+        id_siswa: conv.id_siswa || null,
+        sentAs:   sentAsTemplate ? 'meta_template' : 'free_text',
+        msgType:  actualType,
+        actor:    user.nama || 'CRO',
+      });
+      await conn.query(
+        `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
+         VALUES (?, 'conversation', ?, 'MessageSent', ?, ?, NOW())`,
+        [eventId, String(convId), eventPayload, user.nama || 'system']
+      ).catch(e => console.warn('[Chat] events_log MessageSent insert failed (non-fatal):', e.message));
+    }
+
     await conn.commit();
 
     return {
@@ -458,8 +508,7 @@ function resolveTemplateVariables(tmpl, data = {}) {
 // HELPER: Kirim ke Meta WhatsApp Cloud API
 // ─────────────────────────────────────────────────────────────────────────────
 async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) {
-  const phoneId   = process.env.WA_PHONE_ID;
-  const token     = process.env.WA_ACCESS_TOKEN;
+  const { phoneId, token } = await _getTenantWaCredentials();
 
   // Jika credential belum di-setup, kembalikan null (dev mode)
   if (!phoneId || !token) {
@@ -653,8 +702,7 @@ async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) 
 // HELPER: Upload Media ke Meta API
 // ─────────────────────────────────────────────────────────────────────────────
 async function uploadMediaToMeta(file) {
-  const phoneId   = process.env.WA_PHONE_ID;
-  const token     = process.env.WA_ACCESS_TOKEN;
+  const { phoneId, token } = await _getTenantWaCredentials();
 
   if (!phoneId || !token) {
     console.warn('[Chat] WA_PHONE_ID / WA_ACCESS_TOKEN belum di-set. Media tidak diupload (dev mode).');
@@ -696,7 +744,8 @@ async function uploadMediaToMeta(file) {
 // GET /api/v1/chats/media/:mediaId — Fetch Media dari Meta
 // ─────────────────────────────────────────────────────────────────────────────
 async function getMedia(mediaId, res) {
-  const token = process.env.WA_ACCESS_TOKEN;
+  // [PRD LIVE CHAT §G5] — Gunakan helper tenant-aware agar support BYOW multi-tenant
+  const { token } = await _getTenantWaCredentials();
   if (!token) throw new Error('WA_ACCESS_TOKEN tidak dikonfigurasi.');
 
   try {

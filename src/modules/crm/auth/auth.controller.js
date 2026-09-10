@@ -75,7 +75,8 @@ async function changePassword(req, res) {
       return res.status(400).json({ status: 'error', message: 'Konfirmasi password tidak cocok.' });
     }
 
-    const result = await authService.changePassword(req.user.username, old_password, new_password);
+    const actor = req.user?.nama || req.user?.username;
+    const result = await authService.changePassword(req.user.username, old_password, new_password, actor);
     if (!result.success) {
       return res.status(400).json({ status: 'error', message: result.message });
     }

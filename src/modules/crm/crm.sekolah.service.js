@@ -2,24 +2,31 @@
 
 /**
  * crm.sekolah.service.js
- * Service RESTful Modul Sekolah — nexa-crm-web integration
+ * Service Modul Sekolah — Event-Sourcing Fase 1 (Ontologi Nexa OS)
  *
- * Skema tabel (dari DESCRIBE production 2026-08-20):
- *   aktivitas_ekstra : id, marketing_period, id_aktifitas_ekstra, id_sekolah,
- *                      aktivitas, tanggal_rencana, tujuan_catatan, pj_aktivitas,
- *                      status_aktivitas, tanggal_realisasi, catatan_hasil,
- *                      timestamp, last_updated
- *   aktivitas_sekolah: id, marketing_period, timestamp, tanggal, id_sekolah_nama,
- *                      sekolah_aktif, aktivitas, pic, wa_pic, jabatan_pic,
- *                      hasil, status_terkini, next_action, due_date, status_jadwal,
- *                      catatan, jumlah_siswa, alasan_tidak_bisa_sosialisasi
- *   sekolah_periode  : id_record, marketing_period, id_sekolah, pj_sekolah,
- *                      status_terkini, next_action, due_date, status_updated_date,
- *                      status_jadwal, catatan, created_date, last_updated,
- *                      sekolah_aktif, jumlah_siswa, alasan_tidak_bisa_sosialisasi, cal_event_id
+ * Arsitektur Pragmatic Event-Sourcing:
+ *   - Write Model : `aktivitas_sekolah` (Append-Only Event Log)
+ *   - Read Model  : `sekolah_periode`   (Proyeksi, di-update otomatis oleh Rule Engine)
+ *
+ * Skema tabel (production 2026-09):
  *   master_sekolah   : id_sekolah, nama_sekolah, jenjang, status_sekolah,
  *                      kecamatan, alamat, pic_utama, wa_pic, pj_sekolah,
  *                      created_date, last_updated
+ *   pic_sekolah      : id_sekolah, nama, jabatan, no_wa, bsuid
+ *   sekolah_periode  : id_record, marketing_period, id_sekolah, pj_sekolah,
+ *                      status_terkini, next_action, due_date, status_updated_date,
+ *                      status_jadwal, catatan, created_date, last_updated,
+ *                      sekolah_aktif, jumlah_siswa, alasan_tidak_bisa_sosialisasi,
+ *                      cal_event_id, intent (NEW — VARCHAR(10): 'High'|'Mid'|'Low')
+ *   aktivitas_sekolah: id (PK), marketing_period, timestamp, tanggal,
+ *                      id_sekolah_nama, sekolah_aktif, aktivitas, pic, wa_pic,
+ *                      jabatan_pic, hasil, status_terkini, next_action, due_date,
+ *                      status_jadwal, catatan, jumlah_siswa,
+ *                      alasan_tidak_bisa_sosialisasi
+ *   aktivitas_ekstra : id_aktifitas_ekstra, marketing_period, id_sekolah,
+ *                      aktivitas, tanggal_rencana, tujuan_catatan, pj_aktivitas,
+ *                      status_aktivitas, tanggal_realisasi, catatan_hasil,
+ *                      timestamp, last_updated
  */
 
 const { pool, mainPool } = require('../../config/database');
@@ -30,7 +37,7 @@ const { pool, mainPool } = require('../../config/database');
 async function _checkSekolahLimits(requiredCount = 1) {
   const { tenantStorage } = require('../../config/database');
   let tenantId = tenantStorage.getStore();
-  
+
   if (!tenantId) {
     throw new Error("Gagal: Konteks Tenant tidak ditemukan. Akses diblokir demi keamanan data (Data Spillage Protection).");
   }
@@ -54,6 +61,62 @@ async function _incrementUsedSekolah(tenantId, incrementCount) {
   await mainPool.query("UPDATE tenants SET used_sekolah = used_sekolah + ? WHERE tenant_id = ?", [incrementCount, tenantId]);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// INTERACTION OUTCOME MAP (Event-Sourcing Fase 1)
+//
+// Setiap `outcome` yang dipilih CRO menghasilkan sebuah Event yang dicatat di
+// aktivitas_sekolah (Write Model / Event Log). Backend Rule Engine kemudian
+// membaca event tersebut dan mengupdate `sekolah_periode` (Read Model / Proyeksi).
+//
+// Pipeline Commercial State:
+//   Cold/Belum Visit → Engaged/Proses → Sosialisasi Terjadwal
+//                    → Sudah Sosialisasi → Lead Captured
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Tipe event yang dihasilkan dari setiap outcome (untuk Event Log label di UI)
+const OUTCOME_EVENT_TYPE = {
+  'PIC Tidak di Tempat / Menunggu Respon': 'InteractionLogged',
+  'PIC Minta Proposal Ditinggal':          'InteractionLogged',
+  'PIC Minta Kembali Minggu Depan':        'InteractionLogged',
+  'Diminta Meeting':                       'InteractionLogged',
+  'Menunggu Keputusan':                    'InteractionLogged',
+  'Mendapat Izin Sosialisasi':             'SosialisasiApproved',
+  'Jadwal Sosialisasi Ditunda':            'InteractionLogged',
+  'Jadwal Sosialisasi Dibatalkan':         'InteractionLogged',
+  'PIC Berganti — Perlu Visit Ulang':      'InteractionLogged',
+  'Sosialisasi Selesai':                   'SosialisasiCompleted',
+  'Data Siswa Terinput':                   'BatchStudentsImported',
+  'Ditolak Final':                         'SosialisasiRejected',
+  'Tutup / Merger':                        'SchoolClosed',
+};
+
+// Mapping outcome → hasil transisi state (Read Model update)
+const INTERACTION_OUTCOME_MAP = {
+  // ── Outcomes yang menghasilkan InteractionLogged (tetap di Engaged/Proses)
+  'PIC Tidak di Tempat / Menunggu Respon': { status: 'Tunggu Visit Ulang',        nextAction: 'Visit Ulang',            isTerminal: false, isDowngrade: false, requiresAlasan: false, requiresTanggalSos: false },
+  'PIC Minta Proposal Ditinggal':          { status: 'Tunggu Visit Ulang',        nextAction: 'Visit Ulang',            isTerminal: false, isDowngrade: false, requiresAlasan: false, requiresTanggalSos: false },
+  'PIC Minta Kembali Minggu Depan':        { status: 'Tunggu Visit Ulang',        nextAction: 'Visit Ulang',            isTerminal: false, isDowngrade: false, requiresAlasan: false, requiresTanggalSos: false },
+  'Diminta Meeting':                       { status: 'Tunggu Keputusan',          nextAction: 'Meeting PIC',            isTerminal: false, isDowngrade: false, requiresAlasan: false, requiresTanggalSos: false },
+  'Menunggu Keputusan':                    { status: 'Tunggu Keputusan',          nextAction: 'Follow Up',              isTerminal: false, isDowngrade: false, requiresAlasan: false, requiresTanggalSos: false },
+
+  // ── Outcomes yang menghasilkan SosialisasiApproved (wajib tanggal sosialisasi)
+  'Mendapat Izin Sosialisasi':             { status: 'Sosialisasi Terjadwal',     nextAction: 'Laksanakan Sosialisasi', isTerminal: false, isDowngrade: false, requiresAlasan: false, requiresTanggalSos: true },
+
+  // ── Outcomes downgrade
+  'Jadwal Sosialisasi Ditunda':            { status: 'Tunggu Jadwal Sosialisasi', nextAction: 'Jadwalkan Sosialisasi',  isTerminal: false, isDowngrade: true,  requiresAlasan: false, requiresTanggalSos: false },
+  'Jadwal Sosialisasi Dibatalkan':         { status: 'Tunggu Jadwal Sosialisasi', nextAction: 'Jadwalkan Sosialisasi',  isTerminal: false, isDowngrade: true,  requiresAlasan: false, requiresTanggalSos: false },
+  'PIC Berganti — Perlu Visit Ulang':      { status: 'Tunggu Visit Ulang',        nextAction: 'Visit Ulang',            isTerminal: false, isDowngrade: true,  requiresAlasan: false, requiresTanggalSos: false },
+
+  // ── Outcomes yang menghasilkan SosialisasiCompleted
+  'Sosialisasi Selesai':                   { status: 'Sudah Sosialisasi',         nextAction: 'Input Data Siswa',       isTerminal: false, isDowngrade: false, requiresAlasan: false, requiresTanggalSos: false, autoH1: true },
+
+  // ── Outcomes terminal
+  'Data Siswa Terinput':                   { status: 'Lead Captured',             nextAction: null,                     isTerminal: true,  isDowngrade: false, requiresAlasan: false, requiresTanggalSos: false },
+  'Ditolak Final':                         { status: 'Tidak Bisa Sosialisasi',    nextAction: null,                     isTerminal: true,  isDowngrade: false, requiresAlasan: true,  requiresTanggalSos: false },
+  'Tutup / Merger':                        { status: 'Nonaktif / Tutup / Merger', nextAction: null,                     isTerminal: true,  isDowngrade: false, requiresAlasan: false, requiresTanggalSos: false },
+};
+
+// Backward-compatible alias (endpoint lama /aktivitas masih pakai ini)
 const HASIL_AKTIVITAS_SEKOLAH = {
   'Belum Bertemu PIC':                { status: 'Tunggu Visit Ulang',        nextAction: 'Visit Ulang' },
   'Diminta Visit Ulang':              { status: 'Tunggu Visit Ulang',        nextAction: 'Visit Ulang' },
@@ -99,6 +162,7 @@ async function listSekolah(user, query = {}) {
   if (query.status)     { whereParts.push('sp.status_terkini = ?'); params.push(query.status); }
   if (query.kecamatan)  { whereParts.push('ms.kecamatan = ?');      params.push(query.kecamatan); }
   if (query.pjCro)      { whereParts.push('sp.pj_sekolah = ?');     params.push(query.pjCro); }
+  if (query.intent)     { whereParts.push('sp.intent = ?');         params.push(query.intent); }
   if (query.search) {
     const s = `%${query.search}%`;
     whereParts.push('(ms.nama_sekolah LIKE ? OR sp.id_sekolah LIKE ? OR ms.kecamatan LIKE ?)');
@@ -129,6 +193,8 @@ async function listSekolah(user, query = {}) {
       IFNULL(ms.wa_pic, '')                                  AS picWa,
       IFNULL(sp.pj_sekolah, '')                              AS pjCro,
       IFNULL(sp.status_terkini, '')                          AS status,
+      IFNULL(sp.status_terkini, '')                          AS commercialState,
+      IFNULL(sp.intent, '')                                  AS intent,
       IFNULL(sp.next_action, '')                             AS nextAction,
       IFNULL(DATE_FORMAT(sp.due_date,'%Y-%m-%d'), '')        AS dueDate,
       IFNULL(sp.marketing_period, '')                        AS marketingPeriod,
@@ -151,6 +217,8 @@ async function listSekolah(user, query = {}) {
     pic:             r.picNama ? { nama: r.picNama, jabatan: '', noWa: r.picWa } : null,
     pjCro:           r.pjCro,
     status:          r.status,
+    commercialState: r.commercialState,
+    intent:          r.intent || null,
     nextAction:      r.nextAction,
     dueDate:         r.dueDate || null,
     marketingPeriod: r.marketingPeriod,
@@ -183,9 +251,12 @@ async function statSekolah(user, query = {}) {
 
   return {
     total,
+    cold:         map['Belum Visit'] || 0,
     belumVisit:   map['Belum Visit'] || 0,
+    engaged:      (map['Tunggu Visit Ulang'] || 0) + (map['Tunggu Keputusan'] || 0),
     proses:       (map['Tunggu Visit Ulang'] || 0) + (map['Tunggu Keputusan'] || 0)
                 + (map['Tunggu Jadwal Sosialisasi'] || 0) + (map['Sosialisasi Terjadwal'] || 0),
+    sosialisasiTerjadwal: map['Sosialisasi Terjadwal'] || 0,
     sosialisasi:  map['Sudah Sosialisasi'] || 0,
     leadCaptured: map['Lead Captured'] || 0,
     tidakBisa:    map['Tidak Bisa Sosialisasi'] || 0,
@@ -194,7 +265,7 @@ async function statSekolah(user, query = {}) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// GET /api/v1/sekolah/:id — Detail + timeline + ekstra
+// GET /api/v1/sekolah/:id — Detail + Event Log
 // ═══════════════════════════════════════════════════════════════════
 async function detailSekolah(id, user, query = {}) {
   let mp = query.period || user.selectedPeriod;
@@ -215,6 +286,8 @@ async function detailSekolah(id, user, query = {}) {
       IFNULL(sp.pj_sekolah, '')                              AS pjCro,
       IFNULL(sp.jumlah_siswa, 0)                             AS jumlahSiswaKelas12,
       IFNULL(sp.status_terkini, '')                          AS status,
+      IFNULL(sp.status_terkini, '')                          AS commercialState,
+      IFNULL(sp.intent, '')                                  AS intent,
       IFNULL(sp.next_action, '')                             AS nextAction,
       IFNULL(DATE_FORMAT(sp.due_date,'%Y-%m-%d'), '')        AS dueDate,
       IFNULL(sp.marketing_period, '')                        AS marketingPeriod,
@@ -236,19 +309,20 @@ async function detailSekolah(id, user, query = {}) {
     aging:              parseInt(row.aging, 10) || 0,
     jumlahSiswaKelas12: parseInt(row.jumlahSiswaKelas12, 10) || 0,
     dueDate:            row.dueDate || null,
+    intent:             row.intent || null,
+    commercialState:    row.commercialState,
     pic:                (row.picNama || row.bsuid) ? { nama: row.picNama, jabatan: '', noWa: row.picWa, bsuid: row.bsuid } : null,
   };
   delete s.picNama; delete s.picWa; delete s.bsuid;
 
-  // ── Riwayat aktivitas ──────────────────────────────────────────
-  // NOTE: aktivitas_sekolah uses 'pic' not 'pic_yang_dihubungi'
-  // id_aktivitas might not exist — use `id` (auto-increment PK)
+  // ── Event Log (aktivitas_sekolah — Append-Only) ─────────────────
   const [aktRows] = await pool.query(`
     SELECT
       id                                                      AS id,
       IFNULL(aktivitas, '')                                   AS jenisAktivitas,
       IFNULL(DATE_FORMAT(tanggal, '%Y-%m-%d'), '')            AS tanggal,
       IFNULL(hasil, '')                                       AS hasilAktivitas,
+      IFNULL(hasil, '')                                       AS outcome,
       IFNULL(status_terkini, '')                              AS statusSesudah,
       IFNULL(next_action, '')                                 AS nextAction,
       IFNULL(DATE_FORMAT(due_date, '%Y-%m-%d'), '')           AS dueDate,
@@ -259,10 +333,10 @@ async function detailSekolah(id, user, query = {}) {
       IFNULL(jumlah_siswa, 0)                                 AS jumlahSiswa,
       IFNULL(sekolah_aktif, '')                               AS statusAktif,
       IFNULL(alasan_tidak_bisa_sosialisasi, '')               AS alasanTidakBisa,
-      IFNULL(DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%s'), '') AS createdAt
+      IFNULL(DATE_FORMAT(\`timestamp\`, '%Y-%m-%dT%H:%i:%s'), '') AS createdAt
     FROM aktivitas_sekolah
     WHERE id_sekolah_nama LIKE ? AND marketing_period = ?
-    ORDER BY timestamp DESC
+    ORDER BY \`timestamp\` DESC
   `, [`${id}%`, mp]);
 
   s.aktivitas = aktRows.map(r => ({
@@ -270,6 +344,9 @@ async function detailSekolah(id, user, query = {}) {
     jenisAktivitas: r.jenisAktivitas,
     tanggal:        r.tanggal || null,
     hasilAktivitas: r.hasilAktivitas,
+    outcome:        r.outcome,
+    // Event type label untuk UI Event Log
+    eventType:      OUTCOME_EVENT_TYPE[r.outcome] || 'InteractionLogged',
     statusSesudah:  r.statusSesudah,
     nextAction:     r.nextAction || null,
     dueDate:        r.dueDate || null,
@@ -281,8 +358,7 @@ async function detailSekolah(id, user, query = {}) {
     createdAt:      r.createdAt,
   }));
 
-  // ── Riwayat aktivitas ekstra ────────────────────────────────────
-  // NOTE: tabel tidak punya kolom alasan_batal / updated_at
+  // ── Aktivitas Ekstra ────────────────────────────────────────────
   const [ekstraRows] = await pool.query(`
     SELECT
       id_aktifitas_ekstra                                         AS id,
@@ -293,10 +369,10 @@ async function detailSekolah(id, user, query = {}) {
       IFNULL(pj_aktivitas, '')                                    AS pjAktivitas,
       IFNULL(status_aktivitas, '')                                AS statusAktivitas,
       IFNULL(catatan_hasil, '')                                   AS catatanHasil,
-      IFNULL(DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%s'), '')     AS createdAt
+      IFNULL(DATE_FORMAT(\`timestamp\`, '%Y-%m-%dT%H:%i:%s'), '') AS createdAt
     FROM aktivitas_ekstra
     WHERE id_sekolah LIKE ? AND marketing_period = ?
-    ORDER BY timestamp DESC
+    ORDER BY \`timestamp\` DESC
   `, [`${id}%`, mp]);
 
   s.aktivitasEkstra = ekstraRows.map(r => ({
@@ -312,6 +388,264 @@ async function detailSekolah(id, user, query = {}) {
   }));
 
   return s;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// POST /api/v1/sekolah/:id/interactions
+// EVENT-SOURCING: Catat Interaksi / Event Log
+// Menghasilkan Event: InteractionLogged, SosialisasiRejected, dsb
+// ═══════════════════════════════════════════════════════════════════
+async function logInteraction(sekolahId, data, user) {
+  const mapping = INTERACTION_OUTCOME_MAP[data.outcome];
+  if (!mapping) throw new Error('Outcome interaksi tidak valid: ' + data.outcome);
+
+  if (!data.catatanFakta || data.catatanFakta.trim().length < 5) {
+    throw new Error('Catatan fakta wajib diisi (minimal 5 karakter).');
+  }
+  if (mapping.isDowngrade && data.catatanFakta.trim().length < 10) {
+    throw new Error('Catatan fakta minimal 10 karakter untuk outcome downgrade.');
+  }
+  if (mapping.requiresAlasan && !data.alasanTidakBisa) {
+    throw new Error('Alasan tidak bisa sosialisasi wajib diisi.');
+  }
+  if (mapping.requiresTanggalSos && !data.tanggalSosialisasi) {
+    throw new Error('Tanggal sosialisasi disepakati wajib diisi untuk outcome ini.');
+  }
+
+  const mp  = await getActivePeriod();
+  const now = new Date();
+  const tgl = data.tanggalInteraksi ? new Date(data.tanggalInteraksi) : now;
+
+  let dueDate = null;
+  if (data.tanggalSosialisasi) {
+    dueDate = new Date(data.tanggalSosialisasi);
+  } else if (mapping.autoH1) {
+    const d = new Date(now);
+    d.setDate(d.getDate() + 1);
+    dueDate = d;
+  }
+
+  const statusJadwal = mapping.isTerminal ? 'Tidak ada jadwal'
+    : (dueDate ? 'Terjadwal' : 'Menunggu Penjadwalan');
+
+  const alasanVal = mapping.requiresAlasan
+    ? (data.alasanTidakBisa === 'Alasan lainnya'
+        ? `Alasan lainnya: ${data.catatanAlasan || ''}` : data.alasanTidakBisa)
+    : '';
+
+  const [[msRow]] = await pool.query('SELECT nama_sekolah FROM master_sekolah WHERE id_sekolah = ? LIMIT 1', [sekolahId]);
+  const idSekolahNama = `${sekolahId}-${msRow?.nama_sekolah || ''}`;
+
+  // Resolusi event type
+  const eventType = OUTCOME_EVENT_TYPE[data.outcome] || 'InteractionLogged';
+
+  // ── Write Model: INSERT ke aktivitas_sekolah (Event Log)
+  await pool.query(
+    `INSERT INTO aktivitas_sekolah
+       (marketing_period, \`timestamp\`, tanggal, id_sekolah_nama,
+        sekolah_aktif, aktivitas, pic, wa_pic, jabatan_pic,
+        hasil, status_terkini, next_action, due_date, status_jadwal,
+        catatan, jumlah_siswa, alasan_tidak_bisa_sosialisasi)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      mp, now, tgl, idSekolahNama,
+      data.statusAktif || '',
+      data.channel || 'Visit Langsung',
+      data.namaPic || '',
+      cleanPhone(data.noWaPic || ''),
+      data.jabatanPic || '',
+      data.outcome,
+      mapping.status,
+      mapping.nextAction || null,
+      dueDate,
+      statusJadwal,
+      data.catatanFakta || '',
+      data.jumlahSiswaKelas12 ? Number(data.jumlahSiswaKelas12) : null,
+      alasanVal,
+    ]
+  );
+
+  // ── Read Model: UPDATE sekolah_periode (Proyeksi via Rule Engine)
+  const updClauses = [
+    'status_terkini = ?', 'next_action = ?', 'due_date = ?',
+    'status_jadwal = ?', 'status_updated_date = ?', 'last_updated = ?',
+    'alasan_tidak_bisa_sosialisasi = ?',
+  ];
+  const updParams = [
+    mapping.status, mapping.nextAction || null,
+    dueDate, statusJadwal, now, now, alasanVal,
+  ];
+
+  if (data.statusAktif)        { updClauses.push('sekolah_aktif = ?');  updParams.push(data.statusAktif); }
+  if (data.jumlahSiswaKelas12) { updClauses.push('jumlah_siswa = ?');   updParams.push(Number(data.jumlahSiswaKelas12)); }
+
+  updParams.push(sekolahId, mp);
+  await pool.query(
+    `UPDATE sekolah_periode SET ${updClauses.join(', ')} WHERE id_sekolah = ? AND marketing_period = ?`,
+    updParams
+  );
+
+  // Update master_sekolah (alamat, status aktif saat Visit Awal)
+  const msClauses = ['last_updated = ?'];
+  const msParams  = [now];
+  if (data.statusAktif)   { msClauses.push('status_sekolah = ?'); msParams.push(data.statusAktif); }
+  if (data.alamatLengkap) { msClauses.push('alamat = ?');         msParams.push(data.alamatLengkap); }
+  if (msClauses.length > 1) {
+    msParams.push(sekolahId);
+    await pool.query(`UPDATE master_sekolah SET ${msClauses.join(', ')} WHERE id_sekolah = ?`, msParams);
+  }
+
+  // Update pic_sekolah
+  const psUpdates = [];
+  const psParams = [];
+  if (data.namaPic)    { psUpdates.push('nama = ?');    psParams.push(data.namaPic); }
+  if (data.noWaPic)    { psUpdates.push('no_wa = ?');   psParams.push(cleanPhone(data.noWaPic)); }
+  if (data.jabatanPic) { psUpdates.push('jabatan = ?'); psParams.push(data.jabatanPic); }
+
+  if (psUpdates.length > 0) {
+    const fields = psUpdates.map(u => u.split(' =')[0]);
+    await pool.query(
+      `INSERT INTO pic_sekolah (id_sekolah, ${fields.join(', ')}) VALUES (?, ${fields.map(() => '?').join(', ')})
+       ON DUPLICATE KEY UPDATE ${psUpdates.join(', ')}`,
+      [sekolahId, ...psParams, ...psParams]
+    );
+  }
+
+  // Sync to Google Calendar
+  if (dueDate) {
+    const calendarService = require('./calendar/calendar.service');
+    calendarService.syncEventToCalendar(user.id, {
+      summary: idSekolahNama,
+      description: `Sekolah: ${msRow?.nama_sekolah || ''}\nChannel: ${data.channel || 'Visit Langsung'}\nOutcome: ${data.outcome}\nCatatan: ${data.catatanFakta || ''}`,
+      date: dueDate.toISOString().split('T')[0]
+    }).catch(err => {
+      console.error(`[Calendar Sync] logInteraction (${eventType}) failed:`, err.message);
+    });
+  }
+
+  console.log(`[Event] ${eventType} — Sekolah ${sekolahId} → ${mapping.status}`);
+  return detailSekolah(sekolahId, user, { period: mp });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// POST /api/v1/sekolah/:id/sosialisasi/approve
+// EVENT: SosialisasiApproved
+// ═══════════════════════════════════════════════════════════════════
+async function approveSosialisasi(sekolahId, data, user) {
+  if (!data.tanggalSosialisasi) {
+    throw new Error('Tanggal sosialisasi disepakati wajib diisi.');
+  }
+
+  const mp  = await getActivePeriod();
+  const now = new Date();
+  const tanggalSos = new Date(data.tanggalSosialisasi);
+
+  const [[msRow]] = await pool.query('SELECT nama_sekolah FROM master_sekolah WHERE id_sekolah = ? LIMIT 1', [sekolahId]);
+  const idSekolahNama = `${sekolahId}-${msRow?.nama_sekolah || ''}`;
+
+  // Write Model: Event Log
+  await pool.query(
+    `INSERT INTO aktivitas_sekolah
+       (marketing_period, \`timestamp\`, tanggal, id_sekolah_nama,
+        sekolah_aktif, aktivitas, pic, wa_pic, jabatan_pic,
+        hasil, status_terkini, next_action, due_date, status_jadwal,
+        catatan, jumlah_siswa, alasan_tidak_bisa_sosialisasi)
+     VALUES (?, ?, ?, ?, '', 'Visit Langsung', '', '', '',
+             'Mendapat Izin Sosialisasi', 'Sosialisasi Terjadwal',
+             'Laksanakan Sosialisasi', ?, 'Terjadwal', ?, NULL, '')`,
+    [mp, now, now, idSekolahNama, tanggalSos, data.catatan || '']
+  );
+
+  // Read Model: Proyeksi
+  await pool.query(
+    `UPDATE sekolah_periode
+     SET status_terkini = 'Sosialisasi Terjadwal',
+         next_action    = 'Laksanakan Sosialisasi',
+         due_date       = ?,
+         status_jadwal  = 'Terjadwal',
+         status_updated_date = ?,
+         last_updated   = ?
+     WHERE id_sekolah = ? AND marketing_period = ?`,
+    [tanggalSos, now, now, sekolahId, mp]
+  );
+
+  // Sync Google Calendar
+  const calendarService = require('./calendar/calendar.service');
+  calendarService.syncEventToCalendar(user.id, {
+    summary: `Sosialisasi — ${idSekolahNama}`,
+    description: `Sosialisasi terjadwal\nCatatan: ${data.catatan || ''}`,
+    date: data.tanggalSosialisasi
+  }).catch(err => {
+    console.error('[Calendar Sync] approveSosialisasi failed:', err.message);
+  });
+
+  console.log(`[Event] SosialisasiApproved — Sekolah ${sekolahId} → Tanggal: ${data.tanggalSosialisasi}`);
+  return detailSekolah(sekolahId, user, { period: mp });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// POST /api/v1/sekolah/:id/sosialisasi/complete
+// EVENT: SosialisasiCompleted
+// ═══════════════════════════════════════════════════════════════════
+async function completeSosialisasi(sekolahId, data, user) {
+  const mp  = await getActivePeriod();
+  const now = new Date();
+
+  // Auto due H+1 untuk Input Data Siswa
+  const dueH1 = new Date(now);
+  dueH1.setDate(dueH1.getDate() + 1);
+
+  const [[msRow]] = await pool.query('SELECT nama_sekolah FROM master_sekolah WHERE id_sekolah = ? LIMIT 1', [sekolahId]);
+  const idSekolahNama = `${sekolahId}-${msRow?.nama_sekolah || ''}`;
+
+  // Write Model: Event Log
+  await pool.query(
+    `INSERT INTO aktivitas_sekolah
+       (marketing_period, \`timestamp\`, tanggal, id_sekolah_nama,
+        sekolah_aktif, aktivitas, pic, wa_pic, jabatan_pic,
+        hasil, status_terkini, next_action, due_date, status_jadwal,
+        catatan, jumlah_siswa, alasan_tidak_bisa_sosialisasi)
+     VALUES (?, ?, ?, ?, '', 'Laksanakan Sosialisasi', '', '', '',
+             'Sosialisasi Selesai', 'Sudah Sosialisasi',
+             'Input Data Siswa', ?, 'Terjadwal', ?, NULL, '')`,
+    [mp, now, now, idSekolahNama, dueH1, data.catatan || '']
+  );
+
+  // Read Model: Proyeksi
+  await pool.query(
+    `UPDATE sekolah_periode
+     SET status_terkini = 'Sudah Sosialisasi',
+         next_action    = 'Input Data Siswa',
+         due_date       = ?,
+         status_jadwal  = 'Terjadwal',
+         status_updated_date = ?,
+         last_updated   = ?
+     WHERE id_sekolah = ? AND marketing_period = ?`,
+    [dueH1, now, now, sekolahId, mp]
+  );
+
+  console.log(`[Event] SosialisasiCompleted — Sekolah ${sekolahId} → Sudah Sosialisasi`);
+  return detailSekolah(sekolahId, user, { period: mp });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PATCH /api/v1/sekolah/:id/intent — Update Intent Level
+// ═══════════════════════════════════════════════════════════════════
+async function updateIntent(sekolahId, intent, user) {
+  const VALID_INTENT = ['High', 'Mid', 'Low'];
+  if (!VALID_INTENT.includes(intent)) {
+    throw new Error('Intent tidak valid. Pilih: High, Mid, atau Low.');
+  }
+
+  const mp  = await getActivePeriod();
+  const now = new Date();
+
+  await pool.query(
+    'UPDATE sekolah_periode SET intent = ?, last_updated = ? WHERE id_sekolah = ? AND marketing_period = ?',
+    [intent, now, sekolahId, mp]
+  );
+
+  return { success: true, intent };
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -360,7 +694,7 @@ async function tambahSekolah(data, user) {
     [recId, mp, newId, pj, now, now, now]
   );
 
-  // Buat initial aktivitas supaya masuk ke backlog Weekly Planning
+  // Event log: school registered
   const idSekolahNama = `${newId}-${data.namaSekolah}`;
   await pool.query(
     `INSERT INTO aktivitas_sekolah
@@ -405,7 +739,7 @@ async function editSekolah(id, data, user) {
   if (psUpdates.length > 0) {
     const fields = psUpdates.map(u => u.split(' =')[0]);
     await pool.query(
-      `INSERT INTO pic_sekolah (id_sekolah, ${fields.join(', ')}) VALUES (?, ${fields.map(()=>'?').join(', ')})
+      `INSERT INTO pic_sekolah (id_sekolah, ${fields.join(', ')}) VALUES (?, ${fields.map(() => '?').join(', ')})
        ON DUPLICATE KEY UPDATE ${psUpdates.join(', ')}`,
       [id, ...psParams, ...psParams]
     );
@@ -425,7 +759,7 @@ async function editSekolah(id, data, user) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// DELETE /api/v1/sekolah/:id — Hapus sekolah (guard logic §9)
+// DELETE /api/v1/sekolah/:id — Hapus sekolah (guard logic)
 // ═══════════════════════════════════════════════════════════════════
 async function hapusSekolah(id, alasan, user) {
   if (!['Admin', 'Manager'].includes(user.role)) {
@@ -500,7 +834,6 @@ async function reassignCRO(id, croBaru, alasan, user) {
       "UPDATE aktivitas_ekstra SET pj_aktivitas = ?, last_updated = ? WHERE id_sekolah LIKE ? AND status_aktivitas = 'Direncanakan'",
       [croBaru, now, `${id}%`]
     );
-    // Juga update master_sekolah.pj_sekolah sebagai default PJ
     await conn.query(
       'UPDATE master_sekolah SET pj_sekolah = ?, last_updated = ? WHERE id_sekolah = ?',
       [croBaru, now, id]
@@ -517,7 +850,9 @@ async function reassignCRO(id, croBaru, alasan, user) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// POST /api/v1/sekolah/:id/aktivitas — Input laporan aktivitas
+// POST /api/v1/sekolah/:id/aktivitas — Input aktivitas (BACKWARD COMPAT)
+// Tetap berfungsi agar frontend lama tidak rusak. Internally pakai
+// HASIL_AKTIVITAS_SEKOLAH (alias lama). Redirect ke logInteraction jika bisa.
 // ═══════════════════════════════════════════════════════════════════
 async function inputAktivitas(sekolahId, data, user) {
   const mapping = HASIL_AKTIVITAS_SEKOLAH[data.hasilAktivitas];
@@ -534,7 +869,6 @@ async function inputAktivitas(sekolahId, data, user) {
   const now = new Date();
   const tgl = data.tanggalAktivitas ? new Date(data.tanggalAktivitas) : now;
 
-  // Auto H+1 untuk Sosialisasi Selesai
   let dueDate = null;
   if (data.dueDateNextAction) {
     dueDate = new Date(data.dueDateNextAction);
@@ -552,11 +886,10 @@ async function inputAktivitas(sekolahId, data, user) {
         ? `Alasan lainnya: ${data.catatanAlasan || ''}` : data.alasanTidakBisa)
     : '';
 
-  // Ambil nama sekolah untuk id_sekolah_nama
   const [[msRow]] = await pool.query('SELECT nama_sekolah FROM master_sekolah WHERE id_sekolah = ? LIMIT 1', [sekolahId]);
   const idSekolahNama = `${sekolahId}-${msRow?.nama_sekolah || ''}`;
 
-  // INSERT aktivitas_sekolah (kolom sesuai skema production)
+  // Write Model: Event Log
   await pool.query(
     `INSERT INTO aktivitas_sekolah
        (marketing_period, \`timestamp\`, tanggal, id_sekolah_nama,
@@ -582,7 +915,7 @@ async function inputAktivitas(sekolahId, data, user) {
     ]
   );
 
-  // UPDATE sekolah_periode
+  // Read Model: Proyeksi
   const updClauses = [
     'status_terkini = ?', 'next_action = ?', 'due_date = ?',
     'status_jadwal = ?', 'status_updated_date = ?', 'last_updated = ?',
@@ -594,8 +927,8 @@ async function inputAktivitas(sekolahId, data, user) {
     dueDate, statusJadwal, now, now, alasanVal,
   ];
 
-  if (data.statusAktif)         { updClauses.push('sekolah_aktif = ?');  updParams.push(data.statusAktif); }
-  if (data.jumlahSiswaKelas12)  { updClauses.push('jumlah_siswa = ?');   updParams.push(Number(data.jumlahSiswaKelas12)); }
+  if (data.statusAktif)        { updClauses.push('sekolah_aktif = ?');  updParams.push(data.statusAktif); }
+  if (data.jumlahSiswaKelas12) { updClauses.push('jumlah_siswa = ?');   updParams.push(Number(data.jumlahSiswaKelas12)); }
 
   updParams.push(sekolahId, mp);
   await pool.query(
@@ -603,11 +936,11 @@ async function inputAktivitas(sekolahId, data, user) {
     updParams
   );
 
-  // Update master_sekolah: alamat (saat Visit Awal)
+  // Update master_sekolah
   const msClauses = ['last_updated = ?'];
   const msParams  = [now];
-  if (data.statusAktif)    { msClauses.push('status_sekolah = ?'); msParams.push(data.statusAktif); }
-  if (data.alamatLengkap)  { msClauses.push('alamat = ?');         msParams.push(data.alamatLengkap); }
+  if (data.statusAktif)   { msClauses.push('status_sekolah = ?'); msParams.push(data.statusAktif); }
+  if (data.alamatLengkap) { msClauses.push('alamat = ?');         msParams.push(data.alamatLengkap); }
   if (msClauses.length > 1) {
     msParams.push(sekolahId);
     await pool.query(`UPDATE master_sekolah SET ${msClauses.join(', ')} WHERE id_sekolah = ?`, msParams);
@@ -616,14 +949,14 @@ async function inputAktivitas(sekolahId, data, user) {
   // Update pic_sekolah
   const psUpdates = [];
   const psParams = [];
-  if (data.namaPic) { psUpdates.push('nama = ?'); psParams.push(data.namaPic); }
-  if (data.noWaPic) { psUpdates.push('no_wa = ?'); psParams.push(cleanPhone(data.noWaPic)); }
+  if (data.namaPic)    { psUpdates.push('nama = ?');    psParams.push(data.namaPic); }
+  if (data.noWaPic)    { psUpdates.push('no_wa = ?');   psParams.push(cleanPhone(data.noWaPic)); }
   if (data.jabatanPic) { psUpdates.push('jabatan = ?'); psParams.push(data.jabatanPic); }
 
   if (psUpdates.length > 0) {
     const fields = psUpdates.map(u => u.split(' =')[0]);
     await pool.query(
-      `INSERT INTO pic_sekolah (id_sekolah, ${fields.join(', ')}) VALUES (?, ${fields.map(()=>'?').join(', ')})
+      `INSERT INTO pic_sekolah (id_sekolah, ${fields.join(', ')}) VALUES (?, ${fields.map(() => '?').join(', ')})
        ON DUPLICATE KEY UPDATE ${psUpdates.join(', ')}`,
       [sekolahId, ...psParams, ...psParams]
     );
@@ -650,7 +983,6 @@ async function inputAktivitas(sekolahId, data, user) {
 async function buatAktivitasEkstra(sekolahId, data, user) {
   const mp = await getActivePeriod();
 
-  // Validasi status sekolah
   const [[sp]] = await pool.query(
     'SELECT status_terkini FROM sekolah_periode WHERE id_sekolah = ? AND marketing_period = ? LIMIT 1',
     [sekolahId, mp]
@@ -680,7 +1012,7 @@ async function buatAktivitasEkstra(sekolahId, data, user) {
   const calendarService = require('./calendar/calendar.service');
   const [[ms]] = await pool.query('SELECT nama_sekolah FROM master_sekolah WHERE id_sekolah = ? LIMIT 1', [sekolahId]);
   const judul = `SKL-${sekolahId.replace('SKL-', '')}-${ms?.nama_sekolah || ''}`;
-  
+
   calendarService.syncEventToCalendar(user.id, {
     summary: judul,
     description: `Aktivitas Ekstra\nJenis: ${data.jenisAktivitas}\nTujuan: ${data.tujuanCatatan}`,
@@ -710,7 +1042,6 @@ async function selesaikanAktivitasEkstra(aeId, data, user) {
 
 // ═══════════════════════════════════════════════════════════════════
 // PATCH /api/v1/aktivitas-ekstra/:aeId/batalkan
-// NOTE: tabel tidak punya kolom alasan_batal — simpan di catatan_hasil
 // ═══════════════════════════════════════════════════════════════════
 async function batalkanAktivitasEkstra(aeId, data, user) {
   const catatanBatal = data.alasanBatal
@@ -792,6 +1123,12 @@ module.exports = {
   editSekolah,
   hapusSekolah,
   reassignCRO,
+  // Event-Sourcing endpoints (new)
+  logInteraction,
+  approveSosialisasi,
+  completeSosialisasi,
+  updateIntent,
+  // Backward-compatible
   inputAktivitas,
   buatAktivitasEkstra,
   selesaikanAktivitasEkstra,
