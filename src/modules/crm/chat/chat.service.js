@@ -81,21 +81,20 @@ async function getConversationList(user, query = {}) {
   }
 
   if (user.role === 'CRO') {
-    // CRO hanya melihat konversasi milik siswa yang di-assign kepadanya.
-    // NOTE: Filter ini menggunakan siswa_periode.cro untuk sementara.
-    // Akan diupgrade ke student_current_state.cro_assignee setelah migration tabel projection dijalankan.
+    // [PRD LIVE CHAT §2.1] Filter via Read-Model Projection student_current_state
+    // (tabel sudah di-migrate: 2026-09-10_create_student_current_state.sql)
     whereParts.push(`EXISTS (
-      SELECT 1 FROM siswa_periode sp2
-      WHERE sp2.id_siswa = c.id_siswa AND sp2.cro = ?
+      SELECT 1 FROM student_current_state scs
+      WHERE scs.id_siswa = c.id_siswa AND scs.cro_assignee = ?
     )`);
     params.push(user.nama);
   } else if (user.role === 'Chief CRO') {
-    // Chief CRO: visibilitas hibrida — orphaned chats + milik sendiri + bawahan
+    // Chief CRO: visibilitas hibrida — orphaned + milik sendiri + bawahan
     whereParts.push(`(
       c.id_siswa IS NULL OR EXISTS (
-        SELECT 1 FROM siswa_periode sp2
-        WHERE sp2.id_siswa = c.id_siswa AND (
-          sp2.cro = ? OR sp2.cro IN (
+        SELECT 1 FROM student_current_state scs
+        WHERE scs.id_siswa = c.id_siswa AND (
+          scs.cro_assignee = ? OR scs.cro_assignee IN (
             SELECT nama FROM users WHERE supervisor_id = ?
           )
         )
@@ -128,7 +127,7 @@ async function getConversationList(user, query = {}) {
        c.last_sender,
        c.last_msg_ts,
        c.created_at,
-       sp.commercial_state AS pipeline_status,
+       COALESCE(scs.pipeline_state, sp.commercial_state) AS pipeline_status,
        (SELECT COUNT(*) FROM chat_messages cm
         WHERE cm.conv_id = c.conv_id
           AND cm.direction = 'incoming'
@@ -136,6 +135,7 @@ async function getConversationList(user, query = {}) {
        ) AS unread_count
      FROM conversations c
      LEFT JOIN siswa_periode sp ON sp.id_siswa = c.id_siswa
+     LEFT JOIN student_current_state scs ON scs.id_siswa = c.id_siswa
      ${where}
      ORDER BY c.last_msg_ts DESC
      LIMIT ? OFFSET ?`,
