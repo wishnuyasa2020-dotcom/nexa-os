@@ -82,22 +82,20 @@ async function getConversationList(user, query = {}) {
 
   if (user.role === 'CRO') {
     // CRO hanya melihat konversasi milik siswa yang di-assign kepadanya.
-    // [PRD LIVE CHAT §2.1] — Filter via Read-Model Projection student_current_state
-    // untuk performa optimal (pre-computed, tidak butuh JOIN ke siswa_periode).
+    // NOTE: Filter ini menggunakan siswa_periode.cro untuk sementara.
+    // Akan diupgrade ke student_current_state.cro_assignee setelah migration tabel projection dijalankan.
     whereParts.push(`EXISTS (
-      SELECT 1 FROM student_current_state scs
-      WHERE scs.id_siswa = c.id_siswa AND scs.cro_assignee = ?
+      SELECT 1 FROM siswa_periode sp2
+      WHERE sp2.id_siswa = c.id_siswa AND sp2.cro = ?
     )`);
     params.push(user.nama);
   } else if (user.role === 'Chief CRO') {
-    // Chief CRO: visibilitas hibrida.
-    // Bisa melihat: (1) orphaned chats, (2) milik diri sendiri, (3) milik CRO bawahannya.
-    // [PRD LIVE CHAT §2.2]
+    // Chief CRO: visibilitas hibrida — orphaned chats + milik sendiri + bawahan
     whereParts.push(`(
       c.id_siswa IS NULL OR EXISTS (
-        SELECT 1 FROM student_current_state scs
-        WHERE scs.id_siswa = c.id_siswa AND (
-          scs.cro_assignee = ? OR scs.cro_assignee IN (
+        SELECT 1 FROM siswa_periode sp2
+        WHERE sp2.id_siswa = c.id_siswa AND (
+          sp2.cro = ? OR sp2.cro IN (
             SELECT nama FROM users WHERE supervisor_id = ?
           )
         )
@@ -130,7 +128,7 @@ async function getConversationList(user, query = {}) {
        c.last_sender,
        c.last_msg_ts,
        c.created_at,
-       sp.status_terkini AS pipeline_status,
+       sp.commercial_state AS pipeline_status,
        (SELECT COUNT(*) FROM chat_messages cm
         WHERE cm.conv_id = c.conv_id
           AND cm.direction = 'incoming'
