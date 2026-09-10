@@ -159,7 +159,7 @@ async function listSekolah(user, query = {}) {
   const params     = [mp];
 
   if (user.role === 'CRO') { whereParts.push('sp.pj_sekolah = ?'); params.push(user.nama); }
-  if (query.status)     { whereParts.push('sp.status_terkini = ?'); params.push(query.status); }
+  if (query.status)     { whereParts.push('sp.pipeline_state = ?'); params.push(query.status); }
   if (query.kecamatan)  { whereParts.push('ms.kecamatan = ?');      params.push(query.kecamatan); }
   if (query.pjCro)      { whereParts.push('sp.pj_sekolah = ?');     params.push(query.pjCro); }
   if (query.intent)     { whereParts.push('sp.intent = ?');         params.push(query.intent); }
@@ -193,6 +193,7 @@ async function listSekolah(user, query = {}) {
       IFNULL(ms.wa_pic, '')                                  AS picWa,
       IFNULL(sp.pj_sekolah, '')                              AS pjCro,
       IFNULL(sp.status_terkini, '')                          AS status,
+      IFNULL(sp.pipeline_state, sp.status_terkini)           AS pipelineState,
       IFNULL(sp.status_terkini, '')                          AS commercialState,
       IFNULL(sp.intent, '')                                  AS intent,
       IFNULL(sp.next_action, '')                             AS nextAction,
@@ -217,6 +218,7 @@ async function listSekolah(user, query = {}) {
     pic:             r.picNama ? { nama: r.picNama, jabatan: '', noWa: r.picWa } : null,
     pjCro:           r.pjCro,
     status:          r.status,
+    pipelineState:   r.pipelineState,
     commercialState: r.commercialState,
     intent:          r.intent || null,
     nextAction:      r.nextAction,
@@ -241,27 +243,26 @@ async function statSekolah(user, query = {}) {
   const where = whereParts.join(' AND ');
 
   const [rows] = await pool.query(
-    `SELECT sp.status_terkini, COUNT(*) AS cnt FROM sekolah_periode sp WHERE ${where} GROUP BY sp.status_terkini`,
+    `SELECT sp.pipeline_state, COUNT(*) AS cnt FROM sekolah_periode sp WHERE ${where} GROUP BY sp.pipeline_state`,
     params
   );
 
   const map = {};
   let total = 0;
-  rows.forEach(r => { map[r.status_terkini] = parseInt(r.cnt, 10); total += parseInt(r.cnt, 10); });
+  rows.forEach(r => { map[r.pipeline_state] = parseInt(r.cnt, 10); total += parseInt(r.cnt, 10); });
 
   return {
     total,
-    cold:         map['Belum Visit'] || 0,
-    belumVisit:   map['Belum Visit'] || 0,
-    engaged:      (map['Tunggu Visit Ulang'] || 0) + (map['Tunggu Keputusan'] || 0),
-    proses:       (map['Tunggu Visit Ulang'] || 0) + (map['Tunggu Keputusan'] || 0)
-                + (map['Tunggu Jadwal Sosialisasi'] || 0) + (map['Sosialisasi Terjadwal'] || 0),
+    cold:                 map['Identified'] || 0,
+    belumVisit:           map['Identified'] || 0,
+    engaged:              map['Engaged']    || 0,
+    proses:               map['Engaged']    || 0,
     sosialisasiTerjadwal: map['Sosialisasi Terjadwal'] || 0,
-    sosialisasi:      map['Sudah Sosialisasi'] || 0,
-    identityCaptured: (map['Identity Captured'] || 0) + (map['Lead Captured'] || 0),
-    leadCaptured:     (map['Identity Captured'] || 0) + (map['Lead Captured'] || 0),
-    tidakBisa:        map['Tidak Bisa Sosialisasi'] || 0,
-    nonaktif:         map['Nonaktif / Tutup / Merger'] || 0,
+    sosialisasi:          map['Sudah Sosialisasi'] || 0,
+    identityCaptured:     (map['Identity Captured'] || 0) + (map['Lead Captured'] || 0),
+    leadCaptured:         (map['Identity Captured'] || 0) + (map['Lead Captured'] || 0),
+    tidakBisa:            map['Disqualified'] || 0,
+    nonaktif:             map['Disqualified'] || 0,
   };
 }
 
