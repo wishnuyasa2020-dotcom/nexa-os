@@ -25,4 +25,10 @@ router.get('/activity', ctrl.activity);
 router.get('/templates/stats',        ctrl.templateStats);
 router.get('/templates/:tenantId',    ctrl.templatesByTenant);
 
+// ── DB Pool Management (SaaS Engine) ─────────────────────────
+const saasCtrl = require('../saas/saas.controller');
+router.get('/db-pool',        saasCtrl.getPoolOverview);
+router.post('/db-pool',       saasCtrl.addPool);
+router.delete('/db-pool/:id', saasCtrl.deletePool);
+
 module.exports = router;

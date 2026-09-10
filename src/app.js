@@ -7,6 +7,7 @@ const adminRoutes       = require('./modules/admin/admin.routes');
 const authRoutes        = require('./modules/crm/auth/auth.routes');
 const crmRoutes         = require('./modules/crm/crm.routes');
 const publicRoutes      = require('./modules/crm/crm.public.routes');
+const saasRoutes        = require('./modules/saas/saas.routes');
 const webhookRoutes     = require('./modules/crm/crm.webhook.routes');    // legacy single-tenant
 const tenantWebhook     = require('./modules/crm/webhook.router');         // NEW: BYOW per-tenant
 const { initNurturingCron }    = require('./modules/crm/nurturing/nurturing.cron');
@@ -45,6 +46,7 @@ app.get('/', (_req, res) => {
       admin:    '/api/admin/*',
       auth:     '/api/v1/auth/*',
       crm:      '/api/v1/*',
+      saas:     '/api/v1/saas (register, pool-status)',
       templates:'/api/v1/templates (CRUD + sync + parameters)',
       webhook:  '/webhook/:tenantSlug (BYOW per-tenant)',
       webhook_legacy: '/api/webhook/whatsapp (backward-compat)',
@@ -64,6 +66,9 @@ app.use('/api/crm/auth', authRoutes);         // ← backward-compat
 // CRM routes: tersedia di dua prefix (v1 baru + crm lama)
 app.use('/api/v1', crmRoutes);
 app.use('/api/crm', crmRoutes);               // ← backward-compat
+
+// SaaS routes (Public Self-Registration & Pool Status)
+app.use('/api/v1/saas', saasRoutes);
 
 // Public routes (No JWT required)
 app.use('/api/public', publicRoutes);
