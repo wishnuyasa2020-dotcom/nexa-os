@@ -47,7 +47,7 @@ function parseTaskId(taskId) {
       table:     'aktivitas_siswa',
       dateCol:   'due_date',
       statusCol: 'status_jadwal',
-      nameCol:   'id_siswa_nama',
+      nameCol:   'id_siswa',    // DB prod pakai id_siswa (bukan id_siswa_nama)
     },
     hv:  {
       table:     'home_visit',
@@ -116,28 +116,29 @@ async function getBacklog(user, query = {}) {
   const asiWhere  = ['asi_t.marketing_period = ?', blASI];
   if (isCRO)  { asiWhere.push('sp.cro = ?'); asiParams.push(user.nama); }
   if (search) {
-    asiWhere.push('(asi_t.id_siswa_nama LIKE ? OR asi_t.id_sekolah_nama LIKE ?)');
+    asiWhere.push('(ms.nama_lengkap LIKE ? OR asi_t.id_siswa LIKE ?)');
     asiParams.push(search, search);
   }
 
   const [asiRows] = await pool.query(`
     SELECT
-      CONCAT('asi:', asi_t.id) AS taskId,
-      'siswa'                  AS jenis,
-      asi_t.id_siswa_nama      AS judul,
+      CONCAT('asi:', asi_t.id)                               AS taskId,
+      'siswa'                                                AS jenis,
+      CONCAT(IFNULL(ms.nama_lengkap, asi_t.id_siswa), '')   AS judul,
       asi_t.next_action,
-      asi_t.status_terkini     AS status,
-      sp.commercial_state      AS commercialState,
-      sp.intent                AS intent,
-      sp.cro                   AS owner,
+      IFNULL(asi_t.status_sesudah, '')                       AS status,
+      sp.commercial_state                                    AS commercialState,
+      sp.intent                                              AS intent,
+      sp.cro                                                 AS owner,
       asi_t.marketing_period,
-      DATE_FORMAT(asi_t.due_date, '%Y-%m-%d') AS date_val
+      DATE_FORMAT(asi_t.due_date, '%Y-%m-%d')                AS date_val
     FROM aktivitas_siswa asi_t
-    LEFT JOIN siswa_periode sp 
-      ON asi_t.id_siswa_nama LIKE CONCAT(sp.id_siswa, '-%') 
+    LEFT JOIN master_siswa ms ON asi_t.id_siswa = ms.id_siswa
+    LEFT JOIN siswa_periode sp
+      ON asi_t.id_siswa = sp.id_siswa
       AND sp.marketing_period = asi_t.marketing_period
     WHERE ${asiWhere.join(' AND ')}
-    ORDER BY asi_t.timestamp DESC
+    ORDER BY asi_t.created_at DESC
     LIMIT 150
   `, asiParams);
 
