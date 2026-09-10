@@ -12,16 +12,15 @@ const nodemailer = require('nodemailer');
 const { pool, mainPool } = require('../../config/database');
 
 // ── Transporter Email (Opsional & Non-Blocking) ──────────────────────────────
-let transporter = null;
-if (process.env.SMTP_USER && process.env.SMTP_PASS) {
-  transporter = nodemailer.createTransport({
+function getEmailTransporter() {
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  if (!user || !pass) return null;
+  return nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
     port: parseInt(process.env.SMTP_PORT || '587', 10),
     secure: process.env.SMTP_SECURE === 'true',
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
+    auth: { user, pass },
   });
 }
 
@@ -412,26 +411,50 @@ async function registerTenantSelfService({ brand_name, admin_name, admin_email, 
     tier: 'FREE',
   });
 
-  // 6. Kirim Welcome Email (Non-Blocking)
-  if (transporter) {
-    transporter.sendMail({
-      from: `"Nexa OS" <${process.env.SMTP_USER}>`,
+  // 6. Kirim Email Konfirmasi & Kredensial Akses (Sesuai submodul-email-service.md)
+  const mailTransporter = getEmailTransporter();
+  const loginUrl = process.env.FRONTEND_LOGIN_URL || process.env.FRONTEND_URL || 'https://nexa-crm-web-xi.vercel.app/login';
+
+  if (mailTransporter) {
+    mailTransporter.sendMail({
+      from: `"Nexa OS Support" <${process.env.SMTP_USER}>`,
       to: email,
-      subject: `Selamat Datang di Nexa CRM - Akun ${brand} Siap Digunakan!`,
+      subject: `Konfirmasi Pendaftaran Nexa CRM — Kredensial Akses ${brand}`,
       html: `
-        <div style="font-family: sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; rounded: 8px;">
-          <h2 style="color: #0f172a;">Halo, ${adminDisplayName}!</h2>
-          <p>Pendaftaran tenant <strong>${brand}</strong> di Nexa OS berhasil diproses. Sistem CRM Anda siap beroperasi seketika.</p>
-          <div style="background-color: #f8fafc; padding: 15px; border-radius: 6px; margin: 20px 0;">
-            <p style="margin: 4px 0;"><strong>Tenant ID:</strong> <code>${tenantId}</code></p>
-            <p style="margin: 4px 0;"><strong>Username:</strong> <code>${createdUser.username}</code></p>
-            <p style="margin: 4px 0;"><strong>Paket:</strong> Free Tier (300 Siswa / 10 Sekolah)</p>
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; color: #1e293b;">
+          <div style="text-align: center; margin-bottom: 24px;">
+            <div style="display: inline-block; background: linear-gradient(135deg, #00d68f, #00b87a); color: #04080f; font-weight: 900; font-size: 22px; width: 44px; height: 44px; line-height: 44px; border-radius: 10px; margin-bottom: 8px;">N</div>
+            <h2 style="color: #0f172a; margin: 0; font-size: 22px;">Konfirmasi Akun Nexa CRM</h2>
+            <p style="color: #64748b; margin: 4px 0 0; font-size: 14px;">CRM Berbasis Bukti untuk Lembaga Pendidikan & Vokasi</p>
           </div>
-          <p>Silakan login ke dashboard Anda dengan mengklik tautan di bawah ini:</p>
-          <p><a href="https://nexa-crm-web.vercel.app/login" style="display: inline-block; background-color: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold;">Masuk ke Dashboard Nexa CRM</a></p>
-          <p style="font-size: 12px; color: #64748b; margin-top: 30px;">Email ini dikirim secara otomatis oleh Nexa OS SaaS Engine.</p>
+
+          <p style="font-size: 15px;">Halo <strong>${adminDisplayName}</strong>,</p>
+          <p style="font-size: 14px; line-height: 1.6;">Terima kasih telah mendaftarkan <strong>${brand}</strong> di platform Nexa OS. Sistem database mandiri dan akun Super Admin Anda telah berhasil disiapkan.</p>
+
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #00d68f; padding: 16px; border-radius: 6px; margin: 20px 0;">
+            <h4 style="margin: 0 0 12px; color: #0f172a; font-size: 13.5px; text-transform: uppercase; letter-spacing: 0.05em;">Kredensial Login Super Admin</h4>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>URL Login:</strong> <a href="${loginUrl}" style="color: #2563eb; text-decoration: none; font-weight: 600;">${loginUrl}</a></p>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Tenant ID:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-family: monospace;">${tenantId}</code></p>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Username Admin:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-family: monospace;">${createdUser.username}</code></p>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Password:</strong> <em>(Gunakan password yang Anda tentukan saat pendaftaran)</em></p>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Paket Layanan:</strong> Free Tier (300 Siswa / 10 Sekolah)</p>
+          </div>
+
+          <div style="text-align: center; margin: 28px 0;">
+            <a href="${loginUrl}" style="display: inline-block; background-color: #00d68f; color: #04080f; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 15px; box-shadow: 0 4px 14px rgba(0,214,143,0.35);">Masuk ke Dashboard CRM &rarr;</a>
+          </div>
+
+          <div style="background-color: #fffbeb; border: 1px solid #fef3c7; border-radius: 8px; padding: 14px; margin-top: 24px; font-size: 12.5px; color: #92400e; line-height: 1.5;">
+            <strong>⚠️ Catatan Penting Layanan Email:</strong><br/>
+            Jika email konfirmasi ini masuk ke folder <em>Spam / Junk</em> atau tab <em>Promosi</em>, mohon klik tombol <strong>"Bukan Spam" (Report not spam)</strong> atau pindahkan ke Kotak Masuk (Inbox) agar seluruh notifikasi sistem operasional, laporan intake audience, dan reminder follow-up dapat Anda terima dengan lancar.
+          </div>
+
+          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0 16px;" />
+          <p style="font-size: 11.5px; color: #94a3b8; text-align: center; margin: 0;">Email ini dikirim secara otomatis oleh Nexa OS SaaS Engine &middot; &copy; 2026 Nexa OS. All rights reserved.</p>
         </div>
       `
+    }).then(() => {
+      console.log(`[SaaS Onboarding] Email konfirmasi pendaftaran berhasil dikirim ke ${email}`);
     }).catch(mailErr => {
       console.warn('[SaaS Onboarding] Gagal kirim welcome email:', mailErr.message);
     });
