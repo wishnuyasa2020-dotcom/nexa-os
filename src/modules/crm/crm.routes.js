@@ -15,6 +15,7 @@ const authCtrl = require('./auth/auth.controller');
 const settingsCtrl = require('./crm.settings.controller');
 const cohortCtrl = require('./cohort/cohort.controller');
 const calendarRoutes = require('./calendar/calendar.routes');
+const subscriptionRoutes = require('./subscription/subscription.routes');
 const { requireAuth } = require('../../middleware/requireAuth');
 
 const router = Router();
@@ -349,5 +350,10 @@ router.get('/settings/kecamatan', settingsCtrl.getKecamatanList);
 router.post('/settings/kecamatan', settingsCtrl.addKecamatan);
 router.put('/settings/kecamatan/:id', settingsCtrl.updateKecamatan);
 router.delete('/settings/kecamatan/:id', settingsCtrl.deleteKecamatan);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUBSCRIPTION & BILLING (AUTO-UPGRADE TIER VIA MIDTRANS)
+// ─────────────────────────────────────────────────────────────────────────────
+router.use('/subscription', subscriptionRoutes);
 
 module.exports = router;

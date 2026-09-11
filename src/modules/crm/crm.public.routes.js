@@ -10,6 +10,7 @@ const { Router } = require('express');
 const crypto = require('crypto');
 const { pool, mainPool, tenantStorage } = require('../../config/database');
 const siswaSvc = require('./crm.siswa.service');
+const subscriptionCtrl = require('./subscription/subscription.controller');
 
 const router = Router();
 
@@ -345,5 +346,8 @@ router.post('/form-siswa/:sekolahId', async (req, res) => {
     res.status(400).json({ status: 'error', message: err.message });
   }
 });
+
+// ── MIDTRANS WEBHOOK NOTIFICATION (Payment Gateway Callback) ─────────────────
+router.post('/midtrans/notification', subscriptionCtrl.handleMidtransWebhook);
 
 module.exports = router;

@@ -46,10 +46,12 @@ app.get('/', (_req, res) => {
       admin:    '/api/admin/*',
       auth:     '/api/v1/auth/*',
       crm:      '/api/v1/*',
+      subscription: '/api/v1/subscription (overview, plans, create-transaction, check-status)',
       saas:     '/api/v1/saas (register, pool-status)',
       templates:'/api/v1/templates (CRUD + sync + parameters)',
       webhook:  '/webhook/:tenantSlug (BYOW per-tenant)',
       webhook_legacy: '/api/webhook/whatsapp (backward-compat)',
+      midtrans_webhook: '/api/public/midtrans/notification',
     }
   });
 });
