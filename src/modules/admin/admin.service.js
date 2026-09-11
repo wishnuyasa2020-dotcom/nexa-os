@@ -89,7 +89,12 @@ async function getOverview() {
 async function getTenant() {
   // Ambil profil semua tenant dari Main DB
   const [rows] = await mainPool.query(`
-    SELECT tenant_id, brand_name, tier, status, max_cro, current_period_start, current_period_end, whatsapp_phone_id 
+    SELECT 
+      tenant_id, brand_name, tier, status, billing_cycle,
+      limit_siswa, used_siswa, limit_sekolah, used_sekolah,
+      max_cro, max_admin, max_manager, max_chief_cro,
+      current_period_start, current_period_end, next_quota_reset,
+      whatsapp_phone_id 
     FROM tenants 
     ORDER BY created_at ASC
   `);
@@ -110,9 +115,9 @@ async function getTenant() {
         const [[cro]] = await tDb.query("SELECT COUNT(*) AS cnt FROM users WHERE LOWER(role)='cro' AND LOWER(status)='aktif'");
         const [[siswa]] = await tDb.query("SELECT COUNT(*) AS cnt FROM master_siswa");
         const [[sekolah]] = await tDb.query("SELECT COUNT(*) AS cnt FROM master_sekolah");
-        croCnt = parseInt(cro.cnt) || 0;
-        siswaCnt = parseInt(siswa.cnt) || 0;
-        sekolahCnt = parseInt(sekolah.cnt) || 0;
+        croCnt = parseInt(cro?.cnt) || 0;
+        siswaCnt = parseInt(siswa?.cnt) || 0;
+        sekolahCnt = parseInt(sekolah?.cnt) || 0;
         await tDb.end();
       }
     } catch (e) {
@@ -128,13 +133,22 @@ async function getTenant() {
     results.push({
       tenantId: d.tenant_id,
       brandName: d.brand_name,
-      appName: 'Derma CRM',
-      tier: d.tier,
-      status: d.status,
+      appName: 'Nexa CRM',
+      tier: (d.tier || 'FREE').toUpperCase(),
+      billingCycle: (d.billing_cycle || 'MONTHLY').toUpperCase(),
+      status: d.status || 'ACTIVE',
       primaryColor: '#0066cc',
       activeCro: croCnt,
       totalCro: croCnt,
-      maxCro: d.max_cro || 10,
+      maxCro: d.max_cro || 1,
+      maxAdmin: d.max_admin || 1,
+      maxManager: d.max_manager || 1,
+      maxChiefCro: d.max_chief_cro || 1,
+      limitSiswa: d.limit_siswa || 300,
+      usedSiswa: d.used_siswa != null ? d.used_siswa : siswaCnt,
+      limitSekolah: d.limit_sekolah || 10,
+      usedSekolah: d.used_sekolah != null ? d.used_sekolah : sekolahCnt,
+      nextQuotaReset: d.next_quota_reset,
       activePeriod: activePeriod,
       periodStart: d.current_period_start,
       periodEnd: d.current_period_end,
@@ -388,34 +402,164 @@ async function addCroQuota(payload) {
 }
 
 async function updateTenantTier(payload) {
-  const { tenantId, tier } = payload;
+  const { tenantId, tier, billingCycle, resetDates } = payload;
 
-  if (!tenantId || !tier) throw new Error("Input tidak valid");
+  if (!tenantId || !tier) throw new Error("Input tidak valid: tenantId dan tier wajib diisi.");
 
   // Verifikasi eksistensi tenant
-  const [rows] = await mainPool.query("SELECT tier FROM tenants WHERE tenant_id = ?", [tenantId]);
+  const [rows] = await mainPool.query("SELECT tier, billing_cycle FROM tenants WHERE tenant_id = ?", [tenantId]);
   if (rows.length === 0) throw new Error("Tenant tidak ditemukan");
 
   const currentTier = rows[0].tier;
-
-  // Tentukan limit berdasarkan tier baru (mengacu panduna-tier-feature.md bulanan)
-  let limitSiswa, limitSekolah, maxAdmin, maxManager, maxChiefCro, maxCro;
-  
-  if (tier === 'Free') { limitSiswa = 300; limitSekolah = 10; maxAdmin=1; maxManager=1; maxChiefCro=1; maxCro=1; }
-  else if (tier === 'Pro') { limitSiswa = 1000; limitSekolah = 20; maxAdmin=1; maxManager=1; maxChiefCro=1; maxCro=2; }
-  else if (tier === 'Business') { limitSiswa = 2500; limitSekolah = 41; maxAdmin=1; maxManager=1; maxChiefCro=3; maxCro=10; }
-  else if (tier === 'Enterprise') { limitSiswa = 8333; limitSekolah = 166; maxAdmin=1; maxManager=3; maxChiefCro=5; maxCro=30; }
-  else throw new Error("Tier tidak valid. Harus Free, Pro, Business, atau Enterprise.");
-  
+  const currentCycle = rows[0].billing_cycle || 'MONTHLY';
+  const cycle = (billingCycle || currentCycle || 'MONTHLY').toUpperCase();
   const formattedTier = tier.toUpperCase();
 
-  await mainPool.query(`
-    UPDATE tenants 
-    SET tier = ?, limit_siswa = ?, limit_sekolah = ?, max_admin = ?, max_manager = ?, max_chief_cro = ?, max_cro = ? 
-    WHERE tenant_id = ?
-  `, [formattedTier, limitSiswa, limitSekolah, maxAdmin, maxManager, maxChiefCro, maxCro, tenantId]);
+  const { TIER_PLANS } = require('../crm/subscription/subscription.service');
+  const plan = TIER_PLANS[formattedTier];
+  if (!plan) {
+    throw new Error(`Tier tidak valid. Pilihan: ${Object.keys(TIER_PLANS).join(', ')}`);
+  }
 
-  return { tenantId, previousTier: currentTier, newTier: tier };
+  const limits = plan.limits[cycle] || plan.limits.MONTHLY;
+  const roles = plan.roles;
+  const periodDays = cycle === 'YEARLY' ? 365 : (formattedTier === 'FREE' ? 90 : 30);
+
+  if (resetDates) {
+    await mainPool.query(`
+      UPDATE tenants 
+      SET tier = ?,
+          billing_cycle = ?,
+          status = 'ACTIVE',
+          limit_siswa = ?,
+          limit_sekolah = ?,
+          max_admin = ?,
+          max_manager = ?,
+          max_chief_cro = ?,
+          max_cro = ?,
+          current_period_start = CURDATE(),
+          current_period_end = DATE_ADD(CURDATE(), INTERVAL ? DAY),
+          next_quota_reset = DATE_ADD(CURDATE(), INTERVAL ? DAY)
+      WHERE tenant_id = ?
+    `, [
+      formattedTier,
+      cycle,
+      limits.limit_siswa,
+      limits.limit_sekolah,
+      roles.max_admin,
+      roles.max_manager,
+      roles.max_chief_cro,
+      roles.max_cro,
+      periodDays,
+      periodDays,
+      tenantId,
+    ]);
+  } else {
+    await mainPool.query(`
+      UPDATE tenants 
+      SET tier = ?,
+          billing_cycle = ?,
+          limit_siswa = ?,
+          limit_sekolah = ?,
+          max_admin = ?,
+          max_manager = ?,
+          max_chief_cro = ?,
+          max_cro = ?
+      WHERE tenant_id = ?
+    `, [
+      formattedTier,
+      cycle,
+      limits.limit_siswa,
+      limits.limit_sekolah,
+      roles.max_admin,
+      roles.max_manager,
+      roles.max_chief_cro,
+      roles.max_cro,
+      tenantId,
+    ]);
+  }
+
+  return {
+    tenantId,
+    previousTier: currentTier,
+    newTier: formattedTier,
+    billingCycle: cycle,
+    limits,
+    roles,
+    resetDates: !!resetDates,
+  };
+}
+
+/**
+ * GET billing invoices across all tenants (Superadmin)
+ */
+async function getBillingInvoices() {
+  const [invoices] = await mainPool.query(`
+    SELECT 
+      b.invoice_id,
+      b.tenant_id,
+      b.plan_tier,
+      b.billing_cycle,
+      b.amount,
+      b.status,
+      b.billing_period_start,
+      b.billing_period_end,
+      b.due_date,
+      b.payment_date,
+      b.invoice_url,
+      b.snap_token,
+      b.payment_type,
+      b.created_at,
+      b.updated_at,
+      t.brand_name,
+      t.tier AS current_tenant_tier
+    FROM billing_history b
+    LEFT JOIN tenants t ON b.tenant_id = t.tenant_id
+    ORDER BY b.created_at DESC
+  `);
+
+  let totalRevenue = 0;
+  let unpaidCount = 0;
+  let paidCount = 0;
+
+  for (const inv of invoices) {
+    if (inv.status === 'PAID') {
+      totalRevenue += parseFloat(inv.amount) || 0;
+      paidCount++;
+    } else if (inv.status === 'UNPAID') {
+      unpaidCount++;
+    }
+  }
+
+  const [[activePaidTenantsRow]] = await mainPool.query(`
+    SELECT COUNT(DISTINCT tenant_id) AS cnt 
+    FROM tenants 
+    WHERE tier IN ('PRO', 'BUSINESS', 'ENTERPRISE') AND status = 'ACTIVE'
+  `);
+
+  return {
+    stats: {
+      totalRevenue,
+      unpaidCount,
+      paidCount,
+      totalInvoices: invoices.length,
+      paidTenantsCount: parseInt(activePaidTenantsRow?.cnt) || 0,
+    },
+    invoices,
+  };
+}
+
+/**
+ * Superadmin manual mark invoice as PAID and trigger auto-upgrade
+ */
+async function markInvoicePaid(invoiceId, paymentType = 'MANUAL_SUPERADMIN') {
+  if (!invoiceId) throw new Error('invoiceId wajib diisi');
+
+  const { processPaymentSuccess } = require('../crm/subscription/subscription.service');
+  const success = await processPaymentSuccess(invoiceId, paymentType);
+  if (!success) throw new Error(`Gagal memproses faktur '${invoiceId}'.`);
+
+  return { invoiceId, status: 'PAID', paymentType };
 }
 
 async function updateTenantWhatsappId(payload) {
@@ -534,4 +678,19 @@ async function getTemplatesByTenant(tenantId) {
   };
 }
 
-module.exports = { getOverview, getTenant, getUsageStats, getUserList, getSystemHealth, getActivity, provisionNewTenant, addCroQuota, updateTenantTier, updateTenantWhatsappId, getTemplateStats, getTemplatesByTenant };
+module.exports = {
+  getOverview,
+  getTenant,
+  getUsageStats,
+  getUserList,
+  getSystemHealth,
+  getActivity,
+  provisionNewTenant,
+  addCroQuota,
+  updateTenantTier,
+  updateTenantWhatsappId,
+  getTemplateStats,
+  getTemplatesByTenant,
+  getBillingInvoices,
+  markInvoicePaid,
+};

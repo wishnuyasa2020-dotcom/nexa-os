@@ -191,4 +191,51 @@ async function templatesByTenant(req, res) {
   }
 }
 
-module.exports = { requireAdminKey, ping, overview, tenant, addTenant, addonCro, updateTier, updateWhatsapp, usage, users, health, activity, templateStats, templatesByTenant };
+/**
+ * GET /api/admin/billing/invoices
+ * Daftar faktur seluruh tenant (Superadmin)
+ */
+async function billingInvoices(req, res) {
+  try {
+    const data = await adminService.getBillingInvoices();
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('billingInvoices Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * POST /api/admin/billing/invoices/:invoiceId/mark-paid
+ * Superadmin manual mark invoice as PAID and auto-upgrade tenant
+ */
+async function markInvoicePaid(req, res) {
+  try {
+    const { invoiceId } = req.params;
+    const { paymentType } = req.body || {};
+    const data = await adminService.markInvoicePaid(invoiceId, paymentType || 'MANUAL_SUPERADMIN');
+    res.json({ status: 'ok', data, message: `Faktur ${invoiceId} berhasil ditandai lunas dan paket tenant telah di-upgrade.` });
+  } catch (err) {
+    console.error('markInvoicePaid Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+module.exports = {
+  requireAdminKey,
+  ping,
+  overview,
+  tenant,
+  addTenant,
+  addonCro,
+  updateTier,
+  updateWhatsapp,
+  usage,
+  users,
+  health,
+  activity,
+  templateStats,
+  templatesByTenant,
+  billingInvoices,
+  markInvoicePaid,
+};
