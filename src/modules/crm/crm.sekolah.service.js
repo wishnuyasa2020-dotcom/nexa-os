@@ -137,6 +137,16 @@ function cleanPhone(wa) {
   return wa ? String(wa).replace(/[^0-9]/g, '') : '';
 }
 
+function getPipelineStateFromStatus(status) {
+  if (['Belum Visit', 'Tunggu Visit Ulang'].includes(status)) return 'Identified';
+  if (['Tunggu Keputusan', 'Tunggu Jadwal Sosialisasi', 'Diminta Meeting'].includes(status)) return 'Engaged';
+  if (status === 'Sosialisasi Terjadwal') return 'Sosialisasi Terjadwal';
+  if (status === 'Sudah Sosialisasi') return 'Sudah Sosialisasi';
+  if (['Identity Captured', 'Data Siswa Terinput'].includes(status)) return 'Identity Captured';
+  if (['Tidak Bisa Sosialisasi', 'Nonaktif / Tutup / Merger', 'Ditolak Final'].includes(status)) return 'Disqualified';
+  return 'Identified';
+}
+
 async function getActivePeriod() {
   const [rows] = await pool.query(
     "SELECT nama_period FROM marketing_period WHERE status = 'aktif' ORDER BY created_date DESC LIMIT 1"
@@ -159,7 +169,7 @@ async function listSekolah(user, query = {}) {
   const params     = [mp];
 
   if (user.role === 'CRO') { whereParts.push('sp.pj_sekolah = ?'); params.push(user.nama); }
-  if (query.status)     { whereParts.push('sp.pipeline_state = ?'); params.push(query.status); }
+  if (query.status)     { whereParts.push('(sp.pipeline_state = ? OR sp.status_terkini = ?)'); params.push(query.status, query.status); }
   if (query.kecamatan)  { whereParts.push('ms.kecamatan = ?');      params.push(query.kecamatan); }
   if (query.pjCro)      { whereParts.push('sp.pj_sekolah = ?');     params.push(query.pjCro); }
   if (query.intent)     { whereParts.push('sp.intent = ?');         params.push(query.intent); }
@@ -218,8 +228,8 @@ async function listSekolah(user, query = {}) {
     pic:             r.picNama ? { nama: r.picNama, jabatan: '', noWa: r.picWa } : null,
     pjCro:           r.pjCro,
     status:          r.status,
-    pipelineState:   r.pipelineState,
-    commercialState: r.commercialState,
+    pipelineState:   r.pipelineState || getPipelineStateFromStatus(r.status),
+    commercialState: r.commercialState || r.status,
     intent:          r.intent || null,
     nextAction:      r.nextAction,
     dueDate:         r.dueDate || null,
@@ -243,13 +253,20 @@ async function statSekolah(user, query = {}) {
   const where = whereParts.join(' AND ');
 
   const [rows] = await pool.query(
-    `SELECT sp.pipeline_state, COUNT(*) AS cnt FROM sekolah_periode sp WHERE ${where} GROUP BY sp.pipeline_state`,
+    `SELECT COALESCE(sp.pipeline_state, 'Identified') AS pipeline_state, COUNT(*) AS cnt 
+     FROM sekolah_periode sp 
+     WHERE ${where} 
+     GROUP BY COALESCE(sp.pipeline_state, 'Identified')`,
     params
   );
 
   const map = {};
   let total = 0;
-  rows.forEach(r => { map[r.pipeline_state] = parseInt(r.cnt, 10); total += parseInt(r.cnt, 10); });
+  rows.forEach(r => { 
+    const key = r.pipeline_state || 'Identified';
+    map[key] = (map[key] || 0) + parseInt(r.cnt, 10); 
+    total += parseInt(r.cnt, 10); 
+  });
 
   return {
     total,
@@ -469,12 +486,12 @@ async function logInteraction(sekolahId, data, user) {
 
   // ── Read Model: UPDATE sekolah_periode (Proyeksi via Rule Engine)
   const updClauses = [
-    'status_terkini = ?', 'next_action = ?', 'due_date = ?',
+    'status_terkini = ?', 'pipeline_state = ?', 'next_action = ?', 'due_date = ?',
     'status_jadwal = ?', 'status_updated_date = ?', 'last_updated = ?',
     'alasan_tidak_bisa_sosialisasi = ?',
   ];
   const updParams = [
-    mapping.status, mapping.nextAction || null,
+    mapping.status, getPipelineStateFromStatus(mapping.status), mapping.nextAction || null,
     dueDate, statusJadwal, now, now, alasanVal,
   ];
 
@@ -562,6 +579,7 @@ async function approveSosialisasi(sekolahId, data, user) {
   await pool.query(
     `UPDATE sekolah_periode
      SET status_terkini = 'Sosialisasi Terjadwal',
+         pipeline_state = 'Sosialisasi Terjadwal',
          next_action    = 'Laksanakan Sosialisasi',
          due_date       = ?,
          status_jadwal  = 'Terjadwal',
@@ -617,6 +635,7 @@ async function completeSosialisasi(sekolahId, data, user) {
   await pool.query(
     `UPDATE sekolah_periode
      SET status_terkini = 'Sudah Sosialisasi',
+         pipeline_state = 'Sudah Sosialisasi',
          next_action    = 'Input Data Siswa',
          due_date       = ?,
          status_jadwal  = 'Terjadwal',
@@ -919,12 +938,13 @@ async function inputAktivitas(sekolahId, data, user) {
 
   // Read Model: Proyeksi
   const updClauses = [
-    'status_terkini = ?', 'next_action = ?', 'due_date = ?',
+    'status_terkini = ?', 'pipeline_state = ?', 'next_action = ?', 'due_date = ?',
     'status_jadwal = ?', 'status_updated_date = ?', 'last_updated = ?',
     'alasan_tidak_bisa_sosialisasi = ?',
   ];
   const updParams = [
     mapping.status,
+    getPipelineStateFromStatus(mapping.status),
     mapping.nextAction === 'Tidak Ada' ? null : mapping.nextAction,
     dueDate, statusJadwal, now, now, alasanVal,
   ];

@@ -92,6 +92,30 @@ async function testConnection() {
           // Attempt to add column, ignore if exists
           await tPool.query('ALTER TABLE chat_messages ADD COLUMN reaction VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;');
           console.log(`✅ Auto-Migrate: Added reaction column to ${config.db_name}`);
+          // Auto-Migrate: sekolah_periode.pipeline_state
+          try {
+            const [spCols] = await tPool.query("SHOW COLUMNS FROM sekolah_periode LIKE 'pipeline_state'");
+            if (spCols.length === 0) {
+              await tPool.query("ALTER TABLE sekolah_periode ADD COLUMN pipeline_state VARCHAR(50) NULL DEFAULT 'Identified' AFTER status_terkini;");
+              try { await tPool.query("ALTER TABLE sekolah_periode ADD INDEX idx_sp_pipeline_state (pipeline_state);"); } catch(eIdx) {}
+              await tPool.query(`
+                UPDATE sekolah_periode
+                SET pipeline_state = CASE
+                  WHEN status_terkini IN ('Belum Visit', 'Tunggu Visit Ulang') THEN 'Identified'
+                  WHEN status_terkini IN ('Tunggu Keputusan', 'Tunggu Jadwal Sosialisasi', 'Diminta Meeting') THEN 'Engaged'
+                  WHEN status_terkini = 'Sosialisasi Terjadwal' THEN 'Sosialisasi Terjadwal'
+                  WHEN status_terkini = 'Sudah Sosialisasi' THEN 'Sudah Sosialisasi'
+                  WHEN status_terkini IN ('Identity Captured', 'Data Siswa Terinput') THEN 'Identity Captured'
+                  WHEN status_terkini IN ('Tidak Bisa Sosialisasi', 'Nonaktif / Tutup / Merger', 'Ditolak Final') THEN 'Disqualified'
+                  ELSE IFNULL(pipeline_state, 'Identified')
+                END
+                WHERE pipeline_state IS NULL OR pipeline_state = '' OR pipeline_state = 'Identified';
+              `);
+              console.log(`✅ Auto-Migrate: Added pipeline_state to ${config.db_name}`);
+            }
+          } catch (eSp) {
+            // Abaikan jika tabel tidak ada
+          }
         } catch (e) {
           if (e.code === 'ER_DUP_FIELDNAME') {
              try {
