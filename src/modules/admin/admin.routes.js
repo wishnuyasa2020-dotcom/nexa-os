@@ -31,4 +31,10 @@ router.get('/db-pool',        saasCtrl.getPoolOverview);
 router.post('/db-pool',       saasCtrl.addPool);
 router.delete('/db-pool/:id', saasCtrl.deletePool);
 
+// ── Closed Beta Applications Management (Superadmin) ─────────
+router.get('/beta-applications',              saasCtrl.getBetaApplications);
+router.post('/beta-applications/:id/approve', saasCtrl.approveBetaApplication);
+router.put('/beta-applications/:id/status',   saasCtrl.updateBetaApplicationStatus);
+
 module.exports = router;
+

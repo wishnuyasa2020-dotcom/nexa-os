@@ -143,10 +143,147 @@ async function deletePool(req, res) {
   }
 }
 
+/**
+ * GET /api/v1/saas/beta-status
+ * Endpoint Publik: Mengecek status ketersediaan kuota Closed Beta
+ */
+async function getBetaStatus(req, res) {
+  try {
+    const status = await saasService.getBetaStatus();
+    return res.json({
+      status: 'ok',
+      data: status,
+    });
+  } catch (err) {
+    console.error('[SaaS Controller] getBetaStatus error:', err);
+    return res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * POST /api/v1/saas/apply-beta
+ * Endpoint Publik: Pendaftaran Kurasi Beta + Kuesioner SQL B2B
+ */
+async function applyBeta(req, res) {
+  try {
+    const {
+      brand_name,
+      institution_type,
+      institution_address,
+      team_size,
+      admin_name,
+      admin_email,
+      admin_password,
+      whatsapp_number,
+    } = req.body;
+
+    const data = await saasService.applyBetaApplication({
+      brand_name,
+      institution_type,
+      institution_address,
+      team_size,
+      admin_name,
+      admin_email,
+      admin_password,
+      whatsapp_number,
+    });
+
+    return res.status(201).json({
+      status: 'ok',
+      message: data.message,
+      data,
+    });
+  } catch (err) {
+    console.error('[SaaS Controller] applyBeta error:', err);
+    const statusCode = err.statusCode || (err.message.includes('wajib') || err.message.includes('terdaftar') || err.message.includes('valid') ? 400 : 500);
+    return res.status(statusCode).json({
+      status: 'error',
+      message: err.message || 'Terjadi kesalahan sistem saat mengajukan permohonan beta.',
+    });
+  }
+}
+
+/**
+ * GET /api/admin/beta-applications
+ * Endpoint Super Admin: Daftar seluruh permohonan beta
+ */
+async function getBetaApplications(req, res) {
+  try {
+    const { status } = req.query;
+    const [list, betaStats] = await Promise.all([
+      saasService.listBetaApplications({ status }),
+      saasService.getBetaStatus(),
+    ]);
+
+    return res.json({
+      status: 'ok',
+      data: {
+        stats: betaStats,
+        applications: list,
+      },
+    });
+  } catch (err) {
+    console.error('[SaaS Controller] getBetaApplications error:', err);
+    return res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * POST /api/admin/beta-applications/:id/approve
+ * Endpoint Super Admin: Menyetujui permohonan beta & auto-provisioning DB
+ */
+async function approveBetaApplication(req, res) {
+  try {
+    const { id } = req.params;
+    const reviewerName = req.admin?.name || req.admin?.username || 'Super Admin';
+
+    const result = await saasService.approveBetaApplication(id, reviewerName);
+
+    return res.json({
+      status: 'ok',
+      message: `Permohonan untuk "${result.brandName}" berhasil disetujui! Database ${result.claimedDb} telah dialokasikan.`,
+      data: result,
+    });
+  } catch (err) {
+    console.error('[SaaS Controller] approveBetaApplication error:', err);
+    const statusCode = err.statusCode || (err.message.includes('ditemukan') || err.message.includes('sudah') ? 400 : 500);
+    return res.status(statusCode).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * PUT /api/admin/beta-applications/:id/status
+ * Endpoint Super Admin: Update status permohonan beta (WAITLIST / REJECTED)
+ */
+async function updateBetaApplicationStatus(req, res) {
+  try {
+    const { id } = req.params;
+    const { status, notes } = req.body;
+    const reviewerName = req.admin?.name || req.admin?.username || 'Super Admin';
+
+    const result = await saasService.updateBetaApplicationStatus(id, { status, notes, reviewerName });
+
+    return res.json({
+      status: 'ok',
+      message: `Status permohonan berhasil diperbarui menjadi ${status}.`,
+      data: result,
+    });
+  } catch (err) {
+    console.error('[SaaS Controller] updateBetaApplicationStatus error:', err);
+    return res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
 module.exports = {
   register,
   getPoolStatus,
   getPoolOverview,
   addPool,
   deletePool,
+  getBetaStatus,
+  applyBeta,
+  getBetaApplications,
+  approveBetaApplication,
+  updateBetaApplicationStatus,
 };
+

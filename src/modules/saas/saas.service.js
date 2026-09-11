@@ -476,10 +476,517 @@ async function registerTenantSelfService({ brand_name, admin_name, admin_email, 
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. CLOSED BETA ONBOARDING ENGINE (Selective Onboarding & Quota Safeguard)
+// Sesuai AGENTS.md Aturan 15: Maksimal 10 Tenant Free Aktif
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MAX_FREE_BETA_TENANTS = parseInt(process.env.MAX_BETA_TENANTS || '10', 10);
+
+function _getSecretKeyBuffer() {
+  const secret = process.env.JWT_SECRET_KEY || 'nexamos_closed_beta_secret_2026_key!';
+  return crypto.createHash('sha256').update(String(secret)).digest();
+}
+
+function encryptPassword(text) {
+  const key = _getSecretKeyBuffer();
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+  let encrypted = cipher.update(String(text), 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  return iv.toString('hex') + ':' + encrypted;
+}
+
+function decryptPassword(encryptedText) {
+  const key = _getSecretKeyBuffer();
+  const parts = String(encryptedText).split(':');
+  if (parts.length !== 2) throw new Error('Format password terenkripsi tidak valid.');
+  const iv = Buffer.from(parts[0], 'hex');
+  const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+  let decrypted = decipher.update(parts[1], 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
+}
+
+/**
+ * Mengecek status ketersediaan kuota pendaftaran Beta
+ */
+async function getBetaStatus() {
+  if (!mainPool) throw new Error('Main DB pool tidak terhubung.');
+
+  const [freeTenants] = await mainPool.query(
+    "SELECT COUNT(*) AS total FROM tenants WHERE tier = 'FREE' AND status = 'ACTIVE'"
+  );
+  const activeFreeCount = parseInt(freeTenants[0]?.total || 0, 10);
+
+  const [poolStats] = await mainPool.query(
+    "SELECT COUNT(*) AS available FROM db_pools WHERE status = 'AVAILABLE'"
+  );
+  const availableDbSlots = parseInt(poolStats[0]?.available || 0, 10);
+
+  const [pendingApps] = await mainPool.query(
+    "SELECT COUNT(*) AS total FROM beta_applications WHERE status = 'PENDING'"
+  );
+  const pendingCount = parseInt(pendingApps[0]?.total || 0, 10);
+
+  const isQuotaFull = activeFreeCount >= MAX_FREE_BETA_TENANTS;
+  const isOpen = !isQuotaFull && availableDbSlots > 0;
+
+  return {
+    isOpen,
+    isQuotaFull,
+    activeFreeCount,
+    maxQuota: MAX_FREE_BETA_TENANTS,
+    availableDbSlots,
+    pendingCount,
+    label: isQuotaFull ? 'PENUH (WAITLIST)' : 'DIBATASI (BUKA)',
+  };
+}
+
+/**
+ * Pendaftaran Permohonan Akun Beta (Public Endpoint)
+ * Menerima kuesioner SQL B2B dan data kredensial akun
+ */
+async function applyBetaApplication({
+  brand_name,
+  institution_type,
+  institution_address,
+  team_size,
+  admin_name,
+  admin_email,
+  admin_password,
+  whatsapp_number,
+}) {
+  if (!mainPool) throw new Error('Main DB pool tidak terhubung.');
+
+  // 1. Validasi Input
+  if (!brand_name || !brand_name.trim()) throw new Error('Nama Lembaga / Brand wajib diisi.');
+  if (!institution_type || !institution_type.trim()) throw new Error('Kategori / Bidang Lembaga wajib dipilih.');
+  if (!institution_address || !institution_address.trim()) throw new Error('Alamat Lembaga wajib diisi.');
+  if (!team_size || !team_size.trim()) throw new Error('Jumlah Karyawan / Tim wajib dipilih.');
+  if (!admin_name || !admin_name.trim()) throw new Error('Nama Lengkap PIC wajib diisi.');
+  if (!admin_email || !admin_email.trim() || !admin_email.includes('@')) throw new Error('Email Resmi tidak valid.');
+  if (!admin_password || admin_password.length < 6) throw new Error('Password akun minimal 6 karakter.');
+
+  const brand = brand_name.trim();
+  const instType = institution_type.trim();
+  const instAddress = institution_address.trim();
+  const teamSize = team_size.trim();
+  const picName = admin_name.trim();
+  const email = admin_email.trim().toLowerCase();
+  const wa = whatsapp_number ? String(whatsapp_number).replace(/\D/g, '') : null;
+
+  // 2. Cek apakah brand atau email sudah aktif di tenants
+  const [existTenant] = await mainPool.query(
+    'SELECT tenant_id FROM tenants WHERE brand_name = ?',
+    [brand]
+  );
+  if (existTenant.length > 0) {
+    throw new Error(`Nama lembaga "${brand}" sudah terdaftar sebagai pengguna aktif Nexa MOS.`);
+  }
+
+  // Cek apakah ada permohonan PENDING yang masih dalam kurasi dengan email ini
+  const [existPending] = await mainPool.query(
+    "SELECT id, status FROM beta_applications WHERE admin_email = ? AND status = 'PENDING'",
+    [email]
+  );
+  if (existPending.length > 0) {
+    throw new Error(`Email "${email}" sudah memiliki permohonan beta yang sedang dalam proses kurasi.`);
+  }
+
+  // 3. Evaluasi Kuota
+  const betaStatus = await getBetaStatus();
+  const targetStatus = betaStatus.isQuotaFull ? 'WAITLIST' : 'PENDING';
+
+  // 4. Enkripsi Password untuk disimpan secara aman
+  const encryptedPassword = encryptPassword(admin_password);
+
+  // 5. Simpan ke tabel beta_applications
+  const [insertRes] = await mainPool.query(`
+    INSERT INTO beta_applications (
+      brand_name, institution_type, institution_address, team_size,
+      admin_name, admin_email, admin_password_hash, whatsapp_number,
+      status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    brand,
+    instType,
+    instAddress,
+    teamSize,
+    picName,
+    email,
+    encryptedPassword,
+    wa,
+    targetStatus,
+  ]);
+
+  // 6. Kirim email notifikasi penerimaan permohonan (Non-blocking)
+  const transporter = getEmailTransporter();
+  if (transporter) {
+    const isWaitlist = targetStatus === 'WAITLIST';
+    const emailSubject = isWaitlist
+      ? `[Waiting List Batch 2] Permohonan Akses Beta Nexa MOS — ${brand}`
+      : `Permohonan Akses Beta Diterima (Maks. 1x24 Jam) — ${brand}`;
+
+    transporter.sendMail({
+      from: `"Nexa MOS Onboarding Team" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: emailSubject,
+      html: `
+        <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
+          <div style="text-align: center; margin-bottom: 24px;">
+            <h2 style="color: #04080f; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">Nexa<span style="color:#00d68f;">MOS</span></h2>
+            <p style="color: #64748b; font-size: 12.5px; margin-top: 4px;">Curated Closed Beta Program &middot; Evidence-Based CRM</p>
+          </div>
+          <p style="font-size: 15px; line-height: 1.6;">Halo <strong>${picName}</strong>,</p>
+          <p style="font-size: 14.5px; line-height: 1.6; color: #334155;">
+            ${isWaitlist
+              ? `Terima kasih atas antusiasme Anda terhadap Nexa MOS. Mengingat kuota Closed Beta Batch 1 saat ini telah terpenuhi, permohonan untuk <strong>${brand}</strong> telah kami masukkan ke dalam <strong>Waiting List Prioritas Batch 2</strong>.`
+              : `Terima kasih telah mengajukan akses ke program <strong>Closed Beta Nexa MOS</strong> untuk lembaga <strong>${brand}</strong>.`}
+          </p>
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+            <p style="margin: 0 0 8px; font-size: 13.5px; font-weight: 700; color: #0f172a;">Rincian Pengajuan Anda:</p>
+            <p style="margin: 4px 0; font-size: 13px;"><strong>Lembaga:</strong> ${brand} (${instType})</p>
+            <p style="margin: 4px 0; font-size: 13px;"><strong>Skala Tim:</strong> ${teamSize}</p>
+            <p style="margin: 4px 0; font-size: 13px;"><strong>Status:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:12px;font-weight:700;font-size:11.5px;background:${isWaitlist ? '#fef3c7;color:#92400e;' : '#dcfce7;color:#166534;'}">${isWaitlist ? 'WAITING LIST BATCH 2' : 'SEDANG DIKURASI (1X24 JAM)'}</span></p>
+          </div>
+          <p style="font-size: 13.5px; line-height: 1.6; color: #475569;">
+            ${isWaitlist
+              ? 'Tim teknis kami akan segera menghubungi Anda melalui WhatsApp atau Email begitu slot batch berikutnya dibuka (diperkirakan 1–2 pekan ke depan).'
+              : 'Untuk menjaga stabilitas performa sistem privat, ruang kerja Anda sedang disiapkan dan dikurasi oleh tim teknis kami. Kredensial login aktif akan kami kirimkan dalam waktu <strong>maksimal 1x24 jam</strong>.'}
+          </p>
+          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0 16px;" />
+          <p style="font-size: 11.5px; color: #94a3b8; text-align: center; margin: 0;">&copy; 2026 Nexa MOS Onboarding Team &middot; All rights reserved.</p>
+        </div>
+      `
+    }).catch(mailErr => {
+      console.warn('[Beta Onboarding] Gagal kirim email acknowledgment:', mailErr.message);
+    });
+  }
+
+  return {
+    id: insertRes.insertId,
+    brandName: brand,
+    adminEmail: email,
+    status: targetStatus,
+    isWaitlist: targetStatus === 'WAITLIST',
+    message: targetStatus === 'WAITLIST'
+      ? 'Kuota Beta Batch 1 saat ini penuh. Lembaga Anda telah masuk ke dalam antrean Waiting List Batch 2.'
+      : 'Permohonan berhasil dikirim. Akun dan sistem CRM privat Anda sedang dikurasi oleh tim teknis (Maks. 1x24 Jam).',
+  };
+}
+
+/**
+ * Mengambil daftar pendaftar Beta untuk Superadmin
+ */
+async function listBetaApplications({ status } = {}) {
+  if (!mainPool) throw new Error('Main DB pool tidak terhubung.');
+
+  let query = `
+    SELECT
+      id, brand_name, institution_type, institution_address, team_size,
+      admin_name, admin_email, whatsapp_number, status, notes,
+      approved_tenant_id, reviewed_by, reviewed_at, created_at, updated_at
+    FROM beta_applications
+  `;
+  const params = [];
+
+  if (status && status !== 'ALL') {
+    query += ' WHERE status = ? ';
+    params.push(status);
+  }
+
+  query += `
+    ORDER BY
+      CASE status
+        WHEN 'PENDING'  THEN 1
+        WHEN 'WAITLIST' THEN 2
+        WHEN 'APPROVED' THEN 3
+        WHEN 'REJECTED' THEN 4
+        ELSE 5
+      END,
+      created_at DESC
+  `;
+
+  const [rows] = await mainPool.query(query, params);
+  return rows;
+}
+
+/**
+ * Superadmin Action: Menyetujui pendaftar Beta & Otomatis Provisioning dari db_pools
+ */
+async function approveBetaApplication(id, reviewerName = 'Super Admin') {
+  if (!mainPool) throw new Error('Main DB pool tidak terhubung.');
+
+  // 1. Ambil data aplikasi
+  const [apps] = await mainPool.query(
+    'SELECT * FROM beta_applications WHERE id = ?',
+    [id]
+  );
+  if (apps.length === 0) throw new Error('Data permohonan beta tidak ditemukan.');
+
+  const app = apps[0];
+  if (app.status === 'APPROVED') {
+    throw new Error(`Permohonan untuk "${app.brand_name}" sudah disetujui sebelumnya (Tenant ID: ${app.approved_tenant_id}).`);
+  }
+
+  // 2. Dekripsi password calon user
+  let plainPassword;
+  try {
+    plainPassword = decryptPassword(app.admin_password_hash);
+  } catch (decErr) {
+    console.error('[Beta Approve] Gagal dekripsi password:', decErr.message);
+    throw new Error('Gagal mendekripsi password pendaftar.');
+  }
+
+  // 3. Generate Tenant ID unik
+  const brand = app.brand_name.trim();
+  let tenantId = brand.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  if (!tenantId) tenantId = 'tenant-' + Date.now();
+
+  const [existId] = await mainPool.query('SELECT tenant_id FROM tenants WHERE tenant_id = ?', [tenantId]);
+  if (existId.length > 0) {
+    tenantId += '-' + Math.floor(1000 + Math.random() * 9000);
+  }
+
+  // 4. ATOMIC CLAIM DATABASE DARI DB POOL (TRANSACTION + FOR UPDATE)
+  const mainConn = await mainPool.getConnection();
+  let claimedPoolDb = null;
+
+  try {
+    await mainConn.beginTransaction();
+
+    const [poolRows] = await mainConn.query(`
+      SELECT id, db_host, db_port, db_name, db_user, db_password
+      FROM db_pools
+      WHERE status = 'AVAILABLE'
+      ORDER BY id ASC
+      LIMIT 1
+      FOR UPDATE
+    `);
+
+    if (poolRows.length === 0) {
+      await mainConn.rollback();
+      const err = new Error('Tidak ada database AVAILABLE di DB Pool! Tambahkan database kosong baru di menu DB Pool terlebih dahulu.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    claimedPoolDb = poolRows[0];
+
+    // Tandai status database menjadi IN_USE
+    await mainConn.query(`
+      UPDATE db_pools
+      SET status = 'IN_USE', assigned_tenant_id = ?, assigned_at = NOW()
+      WHERE id = ?
+    `, [tenantId, claimedPoolDb.id]);
+
+    // Insert ke tabel tenants (Tier: FREE, kuota sesuai S&K)
+    await mainConn.query(`
+      INSERT INTO tenants (
+        tenant_id, brand_name, tier, status,
+        limit_siswa, limit_sekolah,
+        max_admin, max_manager, max_chief_cro, max_cro,
+        whatsapp_phone_id
+      ) VALUES (?, ?, 'FREE', 'ACTIVE', 300, 10, 1, 1, 1, 1, ?)
+    `, [tenantId, brand, app.whatsapp_number || null]);
+
+    // Insert ke tabel tenant_databases
+    await mainConn.query(`
+      INSERT INTO tenant_databases (
+        tenant_id, db_host, db_port, db_name, db_user, db_password
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `, [
+      tenantId,
+      claimedPoolDb.db_host,
+      claimedPoolDb.db_port || 3306,
+      claimedPoolDb.db_name,
+      claimedPoolDb.db_user,
+      claimedPoolDb.db_password
+    ]);
+
+    // Update status beta_applications menjadi APPROVED
+    await mainConn.query(`
+      UPDATE beta_applications
+      SET
+        status = 'APPROVED',
+        approved_tenant_id = ?,
+        reviewed_by = ?,
+        reviewed_at = NOW()
+      WHERE id = ?
+    `, [tenantId, reviewerName, id]);
+
+    await mainConn.commit();
+  } catch (txErr) {
+    await mainConn.rollback();
+    throw txErr;
+  } finally {
+    mainConn.release();
+  }
+
+  // 5. AUTO-MIGRATION & INJEKSI SKEMA KE DATABASE TENANT
+  console.log(`[Beta Provisioning] Inisialisasi skema ke DB tenant: ${claimedPoolDb.db_name}...`);
+  const tenantConn = await mysql.createConnection({
+    host: claimedPoolDb.db_host,
+    port: claimedPoolDb.db_port || 3306,
+    user: claimedPoolDb.db_user,
+    password: claimedPoolDb.db_password,
+    database: claimedPoolDb.db_name,
+  });
+
+  let adminUsername = 'admin_' + tenantId.replace(/[^a-z0-9]/g, '');
+
+  try {
+    // 5a. Salin tabel dari referensi jika database masih kosong
+    const [existingTables] = await tenantConn.query('SHOW TABLES');
+    const tableNames = existingTables.map(t => Object.values(t)[0]);
+
+    if (!tableNames.includes('users') || !tableNames.includes('master_siswa')) {
+      console.log(`[Beta Provisioning] Menyalin struktur tabel dari DB referensi ke ${claimedPoolDb.db_name}...`);
+      await tenantConn.query('SET FOREIGN_KEY_CHECKS = 0');
+
+      const [refTables] = await pool.query('SHOW TABLES');
+      const tableKey = Object.keys(refTables[0])[0];
+
+      for (const row of refTables) {
+        const tableName = row[tableKey];
+        const [createRes] = await pool.query(`SHOW CREATE TABLE \`${tableName}\``);
+        let createSql = createRes[0]['Create Table'];
+        createSql = createSql.replace(/COLLATE=[a-zA-Z0-9_]+/g, 'COLLATE=utf8mb4_unicode_ci');
+        await tenantConn.query(`DROP TABLE IF EXISTS \`${tableName}\``);
+        await tenantConn.query(createSql);
+      }
+
+      await tenantConn.query('SET FOREIGN_KEY_CHECKS = 1');
+    }
+
+    // 5b. Pastikan tabel student_current_state ada
+    await tenantConn.query(`
+      CREATE TABLE IF NOT EXISTS student_current_state (
+        id_siswa         VARCHAR(50)  NOT NULL,
+        nama_siswa       VARCHAR(150) NULL,
+        cro_assignee     VARCHAR(100) NULL,
+        pipeline_state   VARCHAR(50)  NULL,
+        status_label     VARCHAR(50)  NULL,
+        marketing_period VARCHAR(20)  NULL,
+        updated_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id_siswa),
+        INDEX idx_cro_assignee (cro_assignee),
+        INDEX idx_pipeline_state (pipeline_state)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    // 5c. Injeksi Akun Admin Pertama
+    const salt = crypto.randomBytes(10).toString('hex');
+    const hash = crypto.createHash('sha256').update(String(plainPassword) + String(salt)).digest('hex');
+
+    const [existingUsers] = await tenantConn.query(
+      'SELECT id FROM users WHERE username = ? OR email = ?',
+      [adminUsername, app.admin_email]
+    );
+
+    if (existingUsers.length > 0) {
+      await tenantConn.query(`
+        UPDATE users
+        SET password = ?, salt = ?, role = 'Super Admin', nama = ?, aktif = 1, is_approved = 1
+        WHERE id = ?
+      `, [hash, salt, app.admin_name, existingUsers[0].id]);
+    } else {
+      await tenantConn.query(`
+        INSERT INTO users (username, password, salt, role, nama, email, aktif, is_approved)
+        VALUES (?, ?, ?, 'Super Admin', ?, ?, 1, 1)
+      `, [adminUsername, hash, salt, app.admin_name, app.admin_email]);
+    }
+  } finally {
+    await tenantConn.end();
+  }
+
+  // 6. Kirim Email Aktivasi Akun Siap Pakai (Non-blocking)
+  const transporter = getEmailTransporter();
+  if (transporter) {
+    const loginUrl = 'https://crm.nexamos.cloud/login';
+    transporter.sendMail({
+      from: `"Nexa MOS Support" <${process.env.SMTP_USER}>`,
+      to: app.admin_email,
+      subject: `🎉 Akun CRM Nexa MOS Anda Telah Aktif — ${brand}`,
+      html: `
+        <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
+          <div style="text-align: center; margin-bottom: 24px;">
+            <h2 style="color: #04080f; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">Nexa<span style="color:#00d68f;">MOS</span></h2>
+            <p style="color: #64748b; font-size: 13px; margin-top: 4px;">CRM Berbasis Bukti untuk LPK &amp; Lembaga Pendidikan</p>
+          </div>
+          <p style="font-size: 15px; line-height: 1.6;">Selamat <strong>${app.admin_name}</strong>,</p>
+          <p style="font-size: 14.5px; line-height: 1.6; color: #334155;">
+            Permohonan Closed Beta untuk lembaga <strong>${brand}</strong> telah disetujui! Database mandiri dan ruang kerja CRM Anda telah selesai dikurasi serta siap digunakan.
+          </p>
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 18px; margin: 24px 0;">
+            <p style="margin: 0 0 10px; font-size: 13.5px; font-weight: 700; color: #0f172a;">Informasi Akses Login Anda:</p>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>URL Login:</strong> <a href="${loginUrl}" style="color:#00d68f;font-weight:600;">crm.nexamos.cloud/login</a></p>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Username:</strong> <code style="background:#e2e8f0;padding:2px 6px;border-radius:4px;font-weight:700;">${adminUsername}</code></p>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Email:</strong> ${app.admin_email}</p>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Password:</strong> <em>(Gunakan password yang Anda daftarkan)</em></p>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Tenant ID:</strong> <code>${tenantId}</code></p>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Paket:</strong> Free Tier Closed Beta (300 Siswa / 10 Sekolah)</p>
+          </div>
+          <div style="text-align: center; margin: 28px 0;">
+            <a href="${loginUrl}" style="display: inline-block; background-color: #00d68f; color: #04080f; padding: 13px 30px; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 15px;">Masuk ke Dashboard CRM &rarr;</a>
+          </div>
+          <p style="font-size: 12px; color: #64748b; line-height: 1.5;">Jika email ini masuk ke tab Promosi atau folder Spam, mohon klik <em>"Bukan Spam"</em> agar Anda selalu menerima notifikasi operasional siswa dan reminder.</p>
+          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0 16px;" />
+          <p style="font-size: 11.5px; color: #94a3b8; text-align: center; margin: 0;">&copy; 2026 Nexa MOS Onboarding Team &middot; All rights reserved.</p>
+        </div>
+      `
+    }).catch(mailErr => {
+      console.warn('[Beta Onboarding] Gagal kirim email aktivasi:', mailErr.message);
+    });
+  }
+
+  return {
+    tenantId,
+    brandName: brand,
+    adminUsername,
+    adminEmail: app.admin_email,
+    claimedDb: claimedPoolDb.db_name,
+    status: 'APPROVED',
+  };
+}
+
+/**
+ * Superadmin Action: Memperbarui status permohonan Beta (WAITLIST atau REJECTED)
+ */
+async function updateBetaApplicationStatus(id, { status, notes, reviewerName = 'Super Admin' }) {
+  if (!mainPool) throw new Error('Main DB pool tidak terhubung.');
+  if (!['PENDING', 'WAITLIST', 'REJECTED'].includes(status)) {
+    throw new Error('Status baru harus PENDING, WAITLIST, atau REJECTED.');
+  }
+
+  const [res] = await mainPool.query(`
+    UPDATE beta_applications
+    SET
+      status = ?,
+      notes = COALESCE(?, notes),
+      reviewed_by = ?,
+      reviewed_at = NOW()
+    WHERE id = ?
+  `, [status, notes || null, reviewerName, id]);
+
+  if (res.affectedRows === 0) {
+    throw new Error('Permohonan beta tidak ditemukan.');
+  }
+
+  return { id, status, notes };
+}
+
 module.exports = {
   getPoolStats,
   listPools,
   addDatabaseToPool,
   removeDatabaseFromPool,
   registerTenantSelfService,
+  getBetaStatus,
+  applyBetaApplication,
+  listBetaApplications,
+  approveBetaApplication,
+  updateBetaApplicationStatus,
 };
+

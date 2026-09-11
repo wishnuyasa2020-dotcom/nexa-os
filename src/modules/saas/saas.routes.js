@@ -47,4 +47,9 @@ router.get('/pool-status', saasCtrl.getPoolStatus);
 // Pendaftaran Mandiri Free Tier
 router.post('/register', saasRateLimiter, saasCtrl.register);
 
+// ── Closed Beta Endpoints (Selective Onboarding) ────────────────────────────
+router.get('/beta-status', saasCtrl.getBetaStatus);
+router.post('/apply-beta', saasRateLimiter, saasCtrl.applyBeta);
+
 module.exports = router;
+
