@@ -15,6 +15,14 @@ router.post('/tenant', ctrl.addTenant);
 router.post('/tenant/addon', ctrl.addonCro);
 router.put('/tenant/tier', ctrl.updateTier);
 router.put('/tenant/whatsapp', ctrl.updateWhatsapp);
+
+// ── WhatsApp Provisioning Requests (Superadmin) ─────────────────
+router.get('/whatsapp-requests',                      ctrl.getWhatsappRequests);
+router.post('/whatsapp-requests/:tenantId/trigger-otp', ctrl.triggerWhatsappOtp);
+router.post('/whatsapp-requests/:tenantId/verify-otp',  ctrl.verifyWhatsappOtp);
+router.put('/whatsapp-requests/:tenantId/approve',    ctrl.approveWhatsappRequest);
+router.put('/whatsapp-requests/:tenantId/reject',     ctrl.rejectWhatsappRequest);
+
 router.get('/usage', ctrl.usage);
 router.get('/users', ctrl.users);
 router.get('/health', ctrl.health);

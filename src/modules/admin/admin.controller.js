@@ -255,6 +255,99 @@ async function resetDemo(req, res) {
   }
 }
 
+/**
+ * GET /api/admin/whatsapp-requests
+ */
+async function getWhatsappRequests(req, res) {
+  try {
+    const statusFilter = req.query.status || null;
+    const data = await adminService.getWhatsappRequests(statusFilter);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('getWhatsappRequests Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * PUT /api/admin/whatsapp-requests/:tenantId/approve
+ */
+async function approveWhatsappRequest(req, res) {
+  try {
+    const { tenantId } = req.params;
+    const data = await adminService.approveWhatsappRequest({
+      tenantId,
+      ...req.body
+    });
+    res.json({
+      status: 'ok',
+      data,
+      message: 'Permohonan nomor WhatsApp berhasil disetujui dan diaktifkan!'
+    });
+  } catch (err) {
+    console.error('approveWhatsappRequest Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * PUT /api/admin/whatsapp-requests/:tenantId/reject
+ */
+async function rejectWhatsappRequest(req, res) {
+  try {
+    const { tenantId } = req.params;
+    const data = await adminService.rejectWhatsappRequest({
+      tenantId,
+      ...req.body
+    });
+    res.json({
+      status: 'ok',
+      data,
+      message: 'Permohonan nomor WhatsApp ditolak.'
+    });
+  } catch (err) {
+    console.error('rejectWhatsappRequest Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * POST /api/admin/whatsapp-requests/:tenantId/trigger-otp
+ */
+async function triggerWhatsappOtp(req, res) {
+  try {
+    const { tenantId } = req.params;
+    const data = await adminService.triggerWhatsappOtp(tenantId);
+    res.json({
+      status: 'ok',
+      data,
+      message: data.message
+    });
+  } catch (err) {
+    console.error('triggerWhatsappOtp Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * POST /api/admin/whatsapp-requests/:tenantId/verify-otp
+ */
+async function verifyWhatsappOtp(req, res) {
+  try {
+    const { tenantId } = req.params;
+    const { code } = req.body;
+    const data = await adminService.verifyWhatsappOtp(tenantId, code);
+    res.json({
+      status: 'ok',
+      data,
+      message: data.message
+    });
+  } catch (err) {
+    console.error('verifyWhatsappOtp Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
 module.exports = {
   requireAdminKey,
   ping,
@@ -274,4 +367,10 @@ module.exports = {
   markInvoicePaid,
   getDemoStatus,
   resetDemo,
+  getWhatsappRequests,
+  approveWhatsappRequest,
+  rejectWhatsappRequest,
+  triggerWhatsappOtp,
+  verifyWhatsappOtp,
 };
+

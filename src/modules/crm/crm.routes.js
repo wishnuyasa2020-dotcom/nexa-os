@@ -13,6 +13,7 @@ const webpushCtrl = require('./chat/webpush.controller');
 const userCtrl = require('./crm.user.controller');
 const authCtrl = require('./auth/auth.controller');
 const settingsCtrl = require('./crm.settings.controller');
+const whatsappSettingsCtrl = require('./whatsapp.settings.controller');
 const cohortCtrl = require('./cohort/cohort.controller');
 const calendarRoutes = require('./calendar/calendar.routes');
 const subscriptionRoutes = require('./subscription/subscription.routes');
@@ -351,6 +352,13 @@ router.get('/settings/kecamatan', settingsCtrl.getKecamatanList);
 router.post('/settings/kecamatan', settingsCtrl.addKecamatan);
 router.put('/settings/kecamatan/:id', settingsCtrl.updateKecamatan);
 router.delete('/settings/kecamatan/:id', settingsCtrl.deleteKecamatan);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS (WHATSAPP BUSINESS INTEGRATION)
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/settings/whatsapp', whatsappSettingsCtrl.getStatus);
+router.post('/settings/whatsapp/register', whatsappSettingsCtrl.register);
+router.delete('/settings/whatsapp/disconnect', whatsappSettingsCtrl.disconnect);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SUBSCRIPTION & BILLING (AUTO-UPGRADE TIER VIA MIDTRANS)
