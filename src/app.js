@@ -12,12 +12,14 @@ const webhookRoutes     = require('./modules/crm/crm.webhook.routes');    // leg
 const tenantWebhook     = require('./modules/crm/webhook.router');         // NEW: BYOW per-tenant
 const { initNurturingCron }    = require('./modules/crm/nurturing/nurturing.cron');
 const { initBroadcastWorker }  = require('./modules/crm/broadcast/broadcast.worker');
+const { initDemoResetCron }    = require('./modules/saas/demo-reset.cron');
 
 const app = express();
 
 // ── Init Background Jobs (Cron) ─────────────────────────────────────────────
 initNurturingCron();   // Nurturing & Snooze — setiap hari 21:00 WIB
 initBroadcastWorker(); // Broadcast Queue Worker — setiap 1 menit
+initDemoResetCron();   // Reset Data Demo Version — setiap Minggu 21:00 WIB
 
 
 

@@ -40,5 +40,9 @@ router.get('/beta-applications',              saasCtrl.getBetaApplications);
 router.post('/beta-applications/:id/approve', saasCtrl.approveBetaApplication);
 router.put('/beta-applications/:id/status',   saasCtrl.updateBetaApplicationStatus);
 
+// ── Demo Version Management & Reset (Superadmin) ──────────────
+router.get('/demo/status', ctrl.getDemoStatus);
+router.post('/demo/reset', ctrl.resetDemo);
+
 module.exports = router;
 

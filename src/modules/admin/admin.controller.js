@@ -221,6 +221,40 @@ async function markInvoicePaid(req, res) {
   }
 }
 
+/**
+ * GET /api/admin/demo/status
+ * Menampilkan status tabel database demo saat ini
+ */
+async function getDemoStatus(req, res) {
+  try {
+    const demoResetService = require('../saas/demo-reset.service');
+    const tenantId = req.query.tenantId || 'crm-demo';
+    const data = await demoResetService.getDemoStatus(tenantId);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * POST /api/admin/demo/reset
+ * Manual trigger reset data demo (Superadmin)
+ */
+async function resetDemo(req, res) {
+  try {
+    const demoResetService = require('../saas/demo-reset.service');
+    const tenantId = req.body?.tenantId || 'crm-demo';
+    const data = await demoResetService.resetDemoData(tenantId, 'superadmin-manual');
+    res.json({
+      status: 'ok',
+      message: `Database demo untuk tenant '${tenantId}' berhasil direset ke 0.`,
+      data
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
 module.exports = {
   requireAdminKey,
   ping,
@@ -238,4 +272,6 @@ module.exports = {
   templatesByTenant,
   billingInvoices,
   markInvoicePaid,
+  getDemoStatus,
+  resetDemo,
 };
