@@ -138,6 +138,43 @@ async function checkPhone(req, res) {
   }
 }
 
+// ── GET /api/v1/siswa/utils/sekolah-sosialisasi ─────────────────────────────
+async function getSekolahSosialisasi(req, res) {
+  try {
+    const data = await svc.getSekolahSosialisasiList(req.user);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[siswa] getSekolahSosialisasi Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+// ── GET /api/v1/siswa/utils/kelas-by-sekolah ────────────────────────────────
+async function getKelasBySekolah(req, res) {
+  try {
+    const { id_sekolah, idSekolah } = req.query;
+    const targetSekolah = id_sekolah || idSekolah;
+    if (!targetSekolah) return res.status(400).json({ status: 'error', message: 'Parameter id_sekolah wajib.' });
+    const data = await svc.getKelasBySekolah(targetSekolah, req.user);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[siswa] getKelasBySekolah Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+// ── POST /api/v1/siswa/assign-kelas ────────────────────────────────────────
+async function assignKelas(req, res) {
+  try {
+    const data = await svc.assignKelasToCro(req.body, req.user);
+    res.json({ status: 'ok', message: `Berhasil meng-assign ${data.jumlah_siswa} siswa kelas ${data.nama_kelas} ke CRO ${data.target_cro}.`, data });
+  } catch (err) {
+    console.error('[siswa] assignKelas Error:', err);
+    const code = err.message.includes('Hanya Chief CRO') ? 403 : 400;
+    res.status(code).json({ status: 'error', message: err.message });
+  }
+}
+
 module.exports = {
   getList,
   getDetail,
@@ -150,4 +187,8 @@ module.exports = {
   logInteraction,
   submitAssessment,
   checkPhone,
+  getSekolahSosialisasi,
+  getKelasBySekolah,
+  assignKelas,
 };
+

@@ -240,37 +240,56 @@ async function tambahSiswa(data, user) {
   
   // Generate ID: STD-{timestamp}-{rand}
   const idSiswa = `STD-${Date.now().toString().slice(-6)}-${Math.floor(Math.random()*1000)}`;
-  const pjCro = data.pj_cro || (user.role === 'CRO' ? user.nama : null);
+  let pjCro = data.pj_cro || (user.role === 'CRO' ? user.nama : null);
 
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
     
-    // ── Resolve kelas_id ──
+    // ── Resolve kelas_id & namaKelas ──
     let kelasId = data.kelas_id;
+    let namaKelas = data.kelas || null;
     if (!kelasId && data.kelas) {
-      const [kRows] = await conn.query('SELECT id FROM master_kelas WHERE nama_kelas = ?', [data.kelas]);
+      const [kRows] = await conn.query('SELECT id, nama_kelas FROM master_kelas WHERE nama_kelas = ?', [data.kelas]);
       if (kRows.length > 0) {
         kelasId = kRows[0].id;
+        namaKelas = kRows[0].nama_kelas;
       } else {
         const [insResult] = await conn.query('INSERT INTO master_kelas (nama_kelas) VALUES (?)', [data.kelas]);
         kelasId = insResult.insertId;
       }
+    } else if (kelasId && !namaKelas) {
+      const [kRows] = await conn.query('SELECT nama_kelas FROM master_kelas WHERE id = ?', [kelasId]);
+      if (kRows.length > 0) namaKelas = kRows[0].nama_kelas;
+    }
+
+    // ── Konsep Utama 1 Kelas 1 CRO: Auto-inherit jika kelas sudah di-assign Chief CRO ──
+    if (!pjCro && (kelasId || namaKelas)) {
+      const [existingClassCro] = await conn.query(`
+        SELECT sp.cro 
+        FROM siswa_periode sp
+        JOIN master_siswa ms ON ms.id_siswa = sp.id_siswa
+        WHERE ms.id_sekolah = ? AND (ms.kelas_id = ? OR ms.kelas = ?) AND sp.marketing_period = ? AND sp.cro IS NOT NULL
+        LIMIT 1
+      `, [data.id_sekolah, kelasId || 0, namaKelas || '', mp]);
+      if (existingClassCro.length > 0 && existingClassCro[0].cro) {
+        pjCro = existingClassCro[0].cro;
+      }
     }
 
     // ── Validasi: 1 Kelas 1 CRO (di sekolah & periode yang sama) ──
-    if (kelasId && pjCro) {
+    if ((kelasId || namaKelas) && pjCro) {
       const [existingCroRow] = await conn.query(`
         SELECT sp.cro 
         FROM siswa_periode sp
         JOIN master_siswa ms ON ms.id_siswa = sp.id_siswa
-        WHERE ms.id_sekolah = ? AND ms.kelas_id = ? AND sp.marketing_period = ?
+        WHERE ms.id_sekolah = ? AND (ms.kelas_id = ? OR ms.kelas = ?) AND sp.marketing_period = ? AND sp.cro IS NOT NULL
         LIMIT 1
-      `, [data.id_sekolah, kelasId, mp]);
+      `, [data.id_sekolah, kelasId || 0, namaKelas || '', mp]);
       
       if (existingCroRow.length > 0) {
         const existingCro = existingCroRow[0].cro;
-        if (existingCro !== pjCro) {
+        if (existingCro && existingCro !== pjCro) {
           throw new Error(`Kelas ini sudah dipegang oleh CRO lain (${existingCro}). Satu kelas di suatu sekolah hanya boleh dipegang oleh satu CRO.`);
         }
       }
@@ -296,9 +315,9 @@ async function tambahSiswa(data, user) {
     // Insert master_siswa
     await conn.query(`
       INSERT INTO master_siswa 
-      (id_siswa, id_sekolah, nama_lengkap, wa, bsuid, kelas_id, minat_awal, rencana_lulus, opt_in_wa)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [idSiswa, data.id_sekolah, data.nama_lengkap, waClean || null, data.bsuid || null, kelasId || null, data.minat_awal, data.rencana_lulus, optInWa]);
+      (id_siswa, id_sekolah, nama_lengkap, wa, bsuid, kelas, kelas_id, minat_awal, rencana_lulus, opt_in_wa)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [idSiswa, data.id_sekolah, data.nama_lengkap, waClean || null, data.bsuid || null, namaKelas, kelasId || null, data.minat_awal, data.rencana_lulus, optInWa]);
 
     // Insert siswa_periode (default Data Masuk, commercial_state Known)
     const idRecord = `SWP-${Date.now().toString().slice(-6)}-${Math.floor(Math.random()*1000)}`;
@@ -874,6 +893,175 @@ async function submitAssessment(id, data, user) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET SEKOLAH SOSIALISASI LIST (Chief CRO Class Assignment)
+// Hanya sekolah yang berstatus 'Sudah Sosialisasi' atau 'Identity Captured'
+// ─────────────────────────────────────────────────────────────────────────────
+async function getSekolahSosialisasiList(user) {
+  let mp = user.selectedPeriod;
+  if (!mp || mp === '-') mp = await getActivePeriod();
+
+  const [rows] = await pool.query(`
+    SELECT 
+      sek.id_sekolah,
+      sek.nama_sekolah,
+      sp.status_terkini,
+      sp.pj_sekolah,
+      COUNT(ms.id_siswa) as total_siswa
+    FROM sekolah_periode sp
+    JOIN master_sekolah sek ON sp.id_sekolah = sek.id_sekolah
+    LEFT JOIN master_siswa ms ON ms.id_sekolah = sek.id_sekolah
+    WHERE sp.marketing_period = ? 
+      AND (sp.status_terkini = 'Sudah Sosialisasi' OR sp.status_terkini = 'Identity Captured' OR sp.pipeline_state = 'Sudah Sosialisasi')
+    GROUP BY sek.id_sekolah, sek.nama_sekolah, sp.status_terkini, sp.pj_sekolah
+    ORDER BY sek.nama_sekolah ASC
+  `, [mp]);
+
+  return rows;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET KELAS BY SEKOLAH (Yang ada siswanya di sekolah tersebut)
+// ─────────────────────────────────────────────────────────────────────────────
+async function getKelasBySekolah(idSekolah, user) {
+  if (!idSekolah) throw new Error('Parameter idSekolah wajib diisi.');
+  let mp = user.selectedPeriod;
+  if (!mp || mp === '-') mp = await getActivePeriod();
+
+  const [rows] = await pool.query(`
+    SELECT 
+      COALESCE(mk.nama_kelas, ms.kelas) as nama_kelas,
+      ms.kelas_id,
+      COUNT(ms.id_siswa) as student_count,
+      GROUP_CONCAT(DISTINCT sp.cro) as current_cro
+    FROM master_siswa ms
+    LEFT JOIN master_kelas mk ON ms.kelas_id = mk.id
+    LEFT JOIN siswa_periode sp ON ms.id_siswa = sp.id_siswa AND sp.marketing_period = ?
+    WHERE ms.id_sekolah = ? AND (ms.kelas IS NOT NULL OR ms.kelas_id IS NOT NULL)
+    GROUP BY COALESCE(mk.nama_kelas, ms.kelas), ms.kelas_id
+    HAVING student_count > 0
+    ORDER BY nama_kelas ASC
+  `, [mp, idSekolah]);
+
+  return rows;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST ASSIGN KELAS TO CRO (Chief CRO / Manager / Admin)
+// Aturan Utama: 1 Kelas Banyak Siswa = 1 CRO di sekolah tertentu
+// Otomatis me-replace CRO sebelumnya jika ada
+// ─────────────────────────────────────────────────────────────────────────────
+async function assignKelasToCro(payload, user) {
+  const role = (user.role || '').toLowerCase();
+  if (!['admin', 'manager', 'chief cro'].includes(role)) {
+    throw new Error('Hanya Chief CRO, Manager, atau Admin yang dapat melakukan penugasan kelas ke CRO.');
+  }
+
+  const { id_sekolah, nama_kelas, kelas_id, target_cro, alasan } = payload;
+  if (!id_sekolah) throw new Error('Sekolah wajib dipilih.');
+  if (!nama_kelas && !kelas_id) throw new Error('Kelas wajib dipilih.');
+  if (!target_cro) throw new Error('Target CRO wajib dipilih.');
+
+  let mp = user.selectedPeriod;
+  if (!mp || mp === '-') mp = await getActivePeriod();
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // 1. Cek sekolah
+    const [sekRows] = await conn.query(`
+      SELECT sek.nama_sekolah, sp.status_terkini 
+      FROM master_sekolah sek
+      LEFT JOIN sekolah_periode sp ON sek.id_sekolah = sp.id_sekolah AND sp.marketing_period = ?
+      WHERE sek.id_sekolah = ?
+      LIMIT 1
+    `, [mp, id_sekolah]);
+
+    if (sekRows.length === 0) {
+      throw new Error('Sekolah tidak ditemukan.');
+    }
+    const sekolah = sekRows[0];
+
+    // 2. Ambil semua siswa di sekolah & kelas tersebut pada periode aktif
+    let queryWhere = 'ms.id_sekolah = ? AND sp.marketing_period = ?';
+    let queryParams = [id_sekolah, mp];
+
+    if (kelas_id) {
+      queryWhere += ' AND (ms.kelas_id = ? OR ms.kelas = ?)';
+      queryParams.push(kelas_id, nama_kelas || String(kelas_id));
+    } else {
+      queryWhere += ' AND (ms.kelas = ? OR mk.nama_kelas = ?)';
+      queryParams.push(nama_kelas, nama_kelas);
+    }
+
+    const [siswaRows] = await conn.query(`
+      SELECT ms.id_siswa, ms.nama_lengkap, sp.cro as cro_sebelumnya
+      FROM master_siswa ms
+      JOIN siswa_periode sp ON ms.id_siswa = sp.id_siswa
+      LEFT JOIN master_kelas mk ON ms.kelas_id = mk.id
+      WHERE ${queryWhere}
+    `, queryParams);
+
+    if (siswaRows.length === 0) {
+      throw new Error(`Tidak ditemukan siswa di kelas "${nama_kelas}" pada sekolah ${sekolah.nama_sekolah}.`);
+    }
+
+    const studentIds = siswaRows.map(s => s.id_siswa);
+    const croSebelumnyaUnik = [...new Set(siswaRows.map(s => s.cro_sebelumnya).filter(Boolean))].join(', ') || 'Belum Ada';
+
+    // 3. Eksekusi Update Bulk: set sp.cro = target_cro (Replace CRO otomatis)
+    await conn.query(`
+      UPDATE siswa_periode
+      SET cro = ?
+      WHERE id_siswa IN (?) AND marketing_period = ?
+    `, [target_cro, studentIds, mp]);
+
+    // 4. Catat Event Sourcing ke events_log (ClassAssignedToCro)
+    const evtId = `EVT-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    await conn.query(`
+      INSERT INTO events_log 
+        (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, marketing_period)
+      VALUES (?, 'Kelas', ?, 'ClassAssignedToCro', ?, ?, ?)
+    `, [
+      evtId,
+      `${id_sekolah}:${nama_kelas}`,
+      JSON.stringify({
+        id_sekolah,
+        nama_sekolah: sekolah.nama_sekolah,
+        nama_kelas,
+        kelas_id: kelas_id || null,
+        target_cro,
+        cro_sebelumnya: croSebelumnyaUnik,
+        jumlah_siswa: studentIds.length,
+        student_ids: studentIds,
+        assigned_by: user.nama || user.username || 'Chief CRO',
+        actor_role: user.role,
+        alasan: alasan || 'Penugasan Teritorial Kelas oleh Chief CRO'
+      }),
+      user.nama || user.username || 'Chief CRO',
+      mp
+    ]);
+
+    await conn.commit();
+
+    return {
+      success: true,
+      id_sekolah,
+      nama_sekolah: sekolah.nama_sekolah,
+      nama_kelas,
+      target_cro,
+      cro_sebelumnya: croSebelumnyaUnik,
+      jumlah_siswa: studentIds.length
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
 module.exports = {
   listSiswa,
   detailSiswa,
@@ -886,4 +1074,8 @@ module.exports = {
   logInteraction,
   submitAssessment,
   checkDuplicatePhone,
+  getSekolahSosialisasiList,
+  getKelasBySekolah,
+  assignKelasToCro,
 };
+

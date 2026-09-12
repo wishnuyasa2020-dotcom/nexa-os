@@ -108,6 +108,11 @@ router.patch('/aktivitas-ekstra/:aeId/batalkan', sekolahCtrl.batalkanEkstra);
 // ─────────────────────────────────────────────────────────────────────────────
 // SISWA — RESTful V1 (nexa-crm-web)
 // ─────────────────────────────────────────────────────────────────────────────
+// Penugasan Kelas Massal (Chief CRO / Manager / Admin)
+router.get('/siswa/utils/sekolah-sosialisasi', siswaCtrl.getSekolahSosialisasi);
+router.get('/siswa/utils/kelas-by-sekolah',    siswaCtrl.getKelasBySekolah);
+router.post('/siswa/assign-kelas',             siswaCtrl.assignKelas);
+
 router.get('/siswa', siswaCtrl.getList);
 router.get('/siswa/:id', siswaCtrl.getDetail);
 router.post('/siswa', siswaCtrl.createSiswa);
@@ -119,6 +124,7 @@ router.post('/siswa/batch', siswaCtrl.importBatch);
 // Event-Sourcing Endpoints (Fase 1)
 router.post('/siswa/:id/interactions', siswaCtrl.logInteraction);
 router.post('/siswa/:id/assessments', siswaCtrl.submitAssessment);
+
 
 // AUDIENCE INTAKE — RESTful V1 (PRD modul-intake-audience)
 router.get('/audience/check', siswaCtrl.checkPhone);
