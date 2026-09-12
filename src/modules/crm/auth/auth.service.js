@@ -318,7 +318,7 @@ async function forgotPassword(email) {
   }
 
   // Buat link reset password
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const frontendUrl = process.env.FRONTEND_URL || 'https://crm.nexamos.cloud';
   const resetLink = `${frontendUrl}/reset-password?token=${token}`;
 
   // Kirim email

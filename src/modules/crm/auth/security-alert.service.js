@@ -131,7 +131,7 @@ async function notifyCredentialChange({
   const timestampWIB = formatWIB(new Date());
   const ipAddress = reqMeta?.ip || 'Tidak diketahui / Internal Server';
   const userAgent = reqMeta?.userAgent || 'Tidak diketahui / API Client';
-  const frontendUrl = process.env.FRONTEND_URL || 'https://nexamos.cloud';
+  const frontendUrl = process.env.FRONTEND_URL || 'https://crm.nexamos.cloud';
 
   // 5. Susun teks dan HTML Email
   let changeTitle = 'Pemberitahuan Perubahan Kredensial Akun';

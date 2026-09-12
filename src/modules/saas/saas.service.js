@@ -413,7 +413,7 @@ async function registerTenantSelfService({ brand_name, admin_name, admin_email, 
 
   // 6. Kirim Email Konfirmasi & Kredensial Akses (Sesuai submodul-email-service.md)
   const mailTransporter = getEmailTransporter();
-  const loginUrl = process.env.FRONTEND_LOGIN_URL || process.env.FRONTEND_URL || 'https://nexa-crm-web-xi.vercel.app/login';
+  const loginUrl = process.env.FRONTEND_LOGIN_URL || (process.env.FRONTEND_URL ? `${process.env.FRONTEND_URL}/login` : 'https://crm.nexamos.cloud/login');
 
   if (mailTransporter) {
     mailTransporter.sendMail({
