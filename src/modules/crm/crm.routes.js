@@ -18,6 +18,7 @@ const cohortCtrl = require('./cohort/cohort.controller');
 const calendarRoutes = require('./calendar/calendar.routes');
 const subscriptionRoutes = require('./subscription/subscription.routes');
 const { requireAuth } = require('../../middleware/requireAuth');
+const { requireActiveWhatsapp } = require('../../middleware/whatsapp.guard');
 
 const router = Router();
 
@@ -226,7 +227,7 @@ router.get('/broadcast/templates/meta', broadcastCtrl.getMetaTemplates);
 router.get('/broadcast/templates/crm', broadcastCtrl.getCrmTemplates);
 
 // POST /api/v1/broadcast/send  → 202 Accepted
-router.post('/broadcast/send', broadcastCtrl.sendBroadcast);
+router.post('/broadcast/send', requireActiveWhatsapp, broadcastCtrl.sendBroadcast);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BROADCAST — Legacy POST (backward-compat GAS & frontend lama)
@@ -234,7 +235,7 @@ router.post('/broadcast/send', broadcastCtrl.sendBroadcast);
 router.post('/broadcast/sekolah', broadcastCtrl.getBroadcastSekolahList);
 router.post('/broadcast/history', broadcastCtrl.getBroadcastHistoryLegacy);
 router.post('/broadcast/preview', broadcastCtrl.getBroadcastTargetPreview);
-router.post('/broadcast/create', broadcastCtrl.createBroadcast);
+router.post('/broadcast/create', requireActiveWhatsapp, broadcastCtrl.createBroadcast);
 router.post('/broadcast/progress', broadcastCtrl.getBroadcastProgress);
 router.post('/broadcast/check-history', broadcastCtrl.checkTemplateHistory);
 
@@ -256,20 +257,20 @@ router.get('/nurturing/snooze/leads', nurturingCtrl.getSnoozeLeads);
 router.get('/nurturing/snooze-leads', nurturingCtrl.getSnoozeLeads);
 
 // POST /api/v1/nurturing/force-trigger      — Jalankan cron manual (testing)
-router.post('/nurturing/force-trigger', nurturingCtrl.forceTrigger);
+router.post('/nurturing/force-trigger', requireActiveWhatsapp, nurturingCtrl.forceTrigger);
 
 // POST /api/v1/nurturing/takeover/:id       — Hentikan bot, CRO ambil alih
 router.post('/nurturing/takeover/:id', nurturingCtrl.takeoverLead);
 
 // POST /api/v1/nurturing/start/:id          — Mulai kampanye probing (NurturingStarted)
-router.post('/nurturing/start/:id', nurturingCtrl.startNurturing);
+router.post('/nurturing/start/:id', requireActiveWhatsapp, nurturingCtrl.startNurturing);
 
 // POST /api/v1/nurturing/snooze/request & /snooze/add — Command SnoozeRequested
-router.post('/nurturing/snooze/request', nurturingCtrl.requestSnooze);
-router.post('/nurturing/snooze/add', nurturingCtrl.addSnooze);
+router.post('/nurturing/snooze/request', requireActiveWhatsapp, nurturingCtrl.requestSnooze);
+router.post('/nurturing/snooze/add', requireActiveWhatsapp, nurturingCtrl.addSnooze);
 
 // POST /api/v1/nurturing/snooze/wakeup & DELETE /snooze/:id — Command Wakeup (SnoozeAborted: Woke Up)
-router.post('/nurturing/snooze/wakeup', nurturingCtrl.wakeupSnooze);
+router.post('/nurturing/snooze/wakeup', requireActiveWhatsapp, nurturingCtrl.wakeupSnooze);
 router.delete('/nurturing/snooze/:id', nurturingCtrl.stopSnooze);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -305,9 +306,9 @@ const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
 
 router.get('/chats', chatCtrl.getConversationList);
-router.post('/chats/initiate', chatCtrl.initiateConversation);
+router.post('/chats/initiate', requireActiveWhatsapp, chatCtrl.initiateConversation);
 router.get('/chats/:convId/messages', chatCtrl.getMessages);
-router.post('/chats/:convId/send', upload.single('file'), chatCtrl.sendMessage);
+router.post('/chats/:convId/send', requireActiveWhatsapp, upload.single('file'), chatCtrl.sendMessage);
 router.patch('/chats/:convId/read', chatCtrl.markAsRead);
 router.get('/chats/media/:mediaId', chatCtrl.getMedia);
 

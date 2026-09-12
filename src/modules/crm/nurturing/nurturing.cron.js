@@ -31,9 +31,9 @@ function initNurturingCron() {
     console.log(`\n[Nurturing Cron] ⏰ Terpicu pada ${ts} (21:00 WIB)`);
 
     try {
-      // Ambil semua tenant yang aktif dan memiliki token WA
+      // Ambil semua tenant yang aktif dan memiliki token WA / status CONNECTED
       const [tenants] = await mainPool.query(
-        'SELECT tenant_id, whatsapp_phone_id, whatsapp_access_token FROM tenants'
+        'SELECT tenant_id, whatsapp_phone_id, whatsapp_access_token, whatsapp_status FROM tenants WHERE status = "ACTIVE"'
       );
 
       console.log(`[Nurturing Cron] Memproses ${tenants.length} tenants...`);
@@ -42,10 +42,28 @@ function initNurturingCron() {
         if (!tenant.tenant_id) continue;
         const tenantId = tenant.tenant_id;
         
+        // PROTEKSI GATING WABA: Hanya proses jika CONNECTED & punya phone_id (kecuali pilot derma-indonesia)
+        const isConnected = tenantId === 'derma-indonesia' || 
+          (tenant.whatsapp_status === 'CONNECTED' && Boolean(tenant.whatsapp_phone_id));
+
+        if (!isConnected) {
+          console.log(`[Nurturing Cron][${tenantId}] ⚠️ WhatsApp belum CONNECTED, lewati.`);
+          continue;
+        }
+
         console.log(`\n[Nurturing Cron] --- Tenant: ${tenantId} ---`);
+        let phoneId = tenant.whatsapp_phone_id;
+        let token   = tenant.whatsapp_access_token || process.env.WA_ACCESS_TOKEN;
+
+        // Legacy pilot tenant derma-indonesia fallback ke .env
+        if (tenantId === 'derma-indonesia') {
+          phoneId = phoneId || process.env.WA_PHONE_ID || process.env.WA_PHONE_NUMBER_ID;
+          token   = token || process.env.WA_ACCESS_TOKEN;
+        }
+
         const credentials = {
-          phoneId: tenant.whatsapp_phone_id,
-          token: tenant.whatsapp_access_token
+          phoneId,
+          token
         };
 
         // Jalankan service di dalam context tenantStorage

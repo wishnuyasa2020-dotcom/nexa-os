@@ -23,29 +23,33 @@ async function _getTenantWaCredentials() {
   // 1. Coba ambil tenantId dari context HTTP request saat ini
   const tenantId = tenantStorage ? tenantStorage.getStore() : null;
 
-  // 2. Jika ada mainPool dan tenantId, baca dari nexamain.tenants (BYOW multi-tenant)
+  // 2. Jika ada mainPool dan tenantId, baca dari nexamain.tenants (Pola A WABA Pilot Derma atau BYOW multi-tenant)
   if (mainPool && tenantId) {
     try {
       const [rows] = await mainPool.query(
-        'SELECT whatsapp_phone_id, whatsapp_waba_id, whatsapp_access_token FROM tenants WHERE tenant_id = ? LIMIT 1',
+        'SELECT whatsapp_phone_id, whatsapp_waba_id, whatsapp_access_token, whatsapp_status FROM tenants WHERE tenant_id = ? LIMIT 1',
         [tenantId]
       );
-      if (rows.length > 0 && rows[0].whatsapp_access_token) {
-        return {
-          token:   rows[0].whatsapp_access_token,
-          wabaId:  rows[0].whatsapp_waba_id,
-          phoneId: rows[0].whatsapp_phone_id,
-        };
+      if (rows.length > 0) {
+        const t = rows[0];
+        // Jika tenant memiliki nomor aktif & status CONNECTED (atau pilot derma-indonesia)
+        if (t.whatsapp_phone_id && (t.whatsapp_status === 'CONNECTED' || tenantId === 'derma-indonesia')) {
+          return {
+            token:   t.whatsapp_access_token || process.env.WA_ACCESS_TOKEN,
+            wabaId:  t.whatsapp_waba_id || process.env.WA_WABA_ID,
+            phoneId: t.whatsapp_phone_id,
+          };
+        }
       }
     } catch (e) {
       console.warn('[Template] Gagal baca credentials dari DB tenant, fallback ke .env:', e.message);
     }
   }
 
-  // 3. Fallback ke .env (mode dev atau single-tenant lama)
+  // 3. Fallback ke .env (mode dev atau pilot tenant derma-indonesia)
   const token   = process.env.WA_ACCESS_TOKEN;
   const wabaId  = process.env.WA_WABA_ID;
-  const phoneId = process.env.WA_PHONE_NUMBER_ID;
+  const phoneId = (tenantId === 'derma-indonesia' || !tenantId) ? (process.env.WA_PHONE_ID || process.env.WA_PHONE_NUMBER_ID) : null;
   return { token, wabaId, phoneId };
 }
 

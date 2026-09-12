@@ -25,21 +25,32 @@ const fs       = require('fs');
 const path     = require('path');
 const os       = require('os');
 
-// ── Helper: baca credentials BYOW dari nexamain.tenants ─────────────────────
+// ── Helper: baca credentials WABA Pilot / BYOW dari nexamain.tenants ─────────
 async function _getTenantWaCredentials() {
   const tenantId = tenantStorage ? tenantStorage.getStore() : null;
 
   if (mainPool && tenantId) {
     try {
       const [rows] = await mainPool.query(
-        'SELECT whatsapp_phone_id, whatsapp_waba_id, whatsapp_access_token FROM tenants WHERE tenant_id = ? LIMIT 1',
+        'SELECT whatsapp_phone_id, whatsapp_waba_id, whatsapp_access_token, whatsapp_status FROM tenants WHERE tenant_id = ? LIMIT 1',
         [tenantId]
       );
-      if (rows.length > 0 && rows[0].whatsapp_access_token) {
+      if (rows.length > 0) {
+        const t = rows[0];
+        // Jika status CONNECTED dan ada whatsapp_phone_id (baik via WABA Pilot maupun BYOW)
+        if (t.whatsapp_phone_id && (t.whatsapp_status === 'CONNECTED' || tenantId === 'derma-indonesia')) {
+          return {
+            phoneId: t.whatsapp_phone_id,
+            token:   t.whatsapp_access_token || process.env.WA_ACCESS_TOKEN,
+            wabaId:  t.whatsapp_waba_id || process.env.WA_WABA_ID,
+            status:  t.whatsapp_status || 'CONNECTED',
+          };
+        }
         return {
-          token:   rows[0].whatsapp_access_token,
-          wabaId:  rows[0].whatsapp_waba_id,
-          phoneId: rows[0].whatsapp_phone_id,
+          phoneId: null,
+          token:   process.env.WA_ACCESS_TOKEN,
+          wabaId:  process.env.WA_WABA_ID,
+          status:  t.whatsapp_status || 'NOT_CONFIGURED',
         };
       }
     } catch (e) {
@@ -47,10 +58,13 @@ async function _getTenantWaCredentials() {
     }
   }
 
+  // Fallback ke .env untuk pilot tenant default
   const token   = process.env.WA_ACCESS_TOKEN;
   const wabaId  = process.env.WA_WABA_ID;
-  const phoneId = process.env.WA_PHONE_ID || process.env.WA_PHONE_NUMBER_ID;
-  return { token, wabaId, phoneId };
+  const phoneId = (tenantId === 'derma-indonesia' || !tenantId)
+    ? (process.env.WA_PHONE_ID || process.env.WA_PHONE_NUMBER_ID)
+    : null;
+  return { token, wabaId, phoneId, status: (tenantId === 'derma-indonesia' || !tenantId) ? 'CONNECTED' : 'NOT_CONFIGURED' };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -318,6 +332,15 @@ async function sendMessage(convId, payload, user) {
       finalBody = 'Location shared';
     }
 
+    // 2.5 Gating: Cek apakah nomor WhatsApp tenant aktif
+    const waCreds = await _getTenantWaCredentials();
+    if (!waCreds.phoneId || (waCreds.status && waCreds.status !== 'CONNECTED')) {
+      const err = new Error('Nomor WhatsApp Bisnis belum terhubung atau belum aktif. Silakan daftarkan dan aktifkan nomor Anda terlebih dahulu di menu Settings > WhatsApp Bisnis.');
+      err.code = 'WHATSAPP_NOT_CONNECTED';
+      err.statusCode = 403;
+      throw err;
+    }
+
     // 3. SMART ROUTING
     if (templateId) {
       const [[tmpl]] = await conn.query(
@@ -506,11 +529,19 @@ function resolveTemplateVariables(tmpl, data = {}) {
 // HELPER: Kirim ke Meta WhatsApp Cloud API
 // ─────────────────────────────────────────────────────────────────────────────
 async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) {
-  const { phoneId, token } = await _getTenantWaCredentials();
+  const { phoneId, token, status } = await _getTenantWaCredentials();
+
+  // Jika nomor belum terhubung atau belum aktif, tolak pengiriman
+  if (!phoneId || (status !== 'CONNECTED' && status !== undefined)) {
+    const err = new Error('Nomor WhatsApp Bisnis belum aktif. Silakan aktifkan nomor Anda di menu Settings > WhatsApp Bisnis.');
+    err.code = 'WHATSAPP_NOT_CONNECTED';
+    err.statusCode = 403;
+    throw err;
+  }
 
   // Jika credential belum di-setup, kembalikan null (dev mode)
-  if (!phoneId || !token) {
-    console.warn('[Chat] WA_PHONE_ID / WA_ACCESS_TOKEN belum di-set. Pesan tidak dikirim ke Meta (dev mode).');
+  if (!token) {
+    console.warn('[Chat] WA_ACCESS_TOKEN belum di-set. Pesan tidak dikirim ke Meta (dev mode).');
     return `DEV-MSG-${Date.now()}`;
   }
 

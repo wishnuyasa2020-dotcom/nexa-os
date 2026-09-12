@@ -37,29 +37,32 @@ const META_TIMEOUT  = 12000; // ms
 // ── State flag agar tidak overlap jika satu run belum selesai ────────────────
 let _isRunning = false;
 
-// ── Helper: baca credentials BYOW dari nexamain.tenants ──────────────────────
+// ── Helper: baca credentials WABA Pilot / BYOW dari nexamain.tenants ─────────
 async function _getCredentials(tenantId) {
-  // Coba baca dari nexamain.tenants dulu (BYOW multi-tenant)
+  // Coba baca dari nexamain.tenants dulu (Pola A WABA Pilot Derma atau BYOW multi-tenant)
   if (mainPool && tenantId) {
     try {
       const [rows] = await mainPool.query(
-        'SELECT whatsapp_phone_id, whatsapp_access_token FROM tenants WHERE tenant_id = ? LIMIT 1',
+        'SELECT whatsapp_phone_id, whatsapp_access_token, whatsapp_status FROM tenants WHERE tenant_id = ? LIMIT 1',
         [tenantId]
       );
-      if (rows.length > 0 && rows[0].whatsapp_access_token) {
-        return {
-          phoneId: rows[0].whatsapp_phone_id,
-          token:   rows[0].whatsapp_access_token,
-        };
+      if (rows.length > 0) {
+        const t = rows[0];
+        if (t.whatsapp_phone_id && (t.whatsapp_status === 'CONNECTED' || tenantId === 'derma-indonesia')) {
+          return {
+            phoneId: t.whatsapp_phone_id,
+            token:   t.whatsapp_access_token || process.env.WA_ACCESS_TOKEN,
+          };
+        }
       }
     } catch (e) {
       console.warn('[Broadcast Worker] Gagal baca credentials dari DB, fallback ke .env:', e.message);
     }
   }
 
-  // Fallback ke .env (dev mode / single-tenant lama)
+  // Fallback ke .env untuk pilot tenant default
   return {
-    phoneId: process.env.WA_PHONE_ID || process.env.WA_PHONE_NUMBER_ID,
+    phoneId: (tenantId === 'derma-indonesia' || !tenantId) ? (process.env.WA_PHONE_ID || process.env.WA_PHONE_NUMBER_ID) : null,
     token:   process.env.WA_ACCESS_TOKEN,
   };
 }
@@ -422,21 +425,29 @@ function initBroadcastWorker() {
 
     try {
       const [tenants] = await mainPool.query(
-        'SELECT tenant_id, whatsapp_phone_id, whatsapp_access_token FROM tenants WHERE status = "ACTIVE"'
+        'SELECT tenant_id, whatsapp_status, whatsapp_phone_id, whatsapp_access_token FROM tenants WHERE status = "ACTIVE"'
       );
 
       for (const tenant of tenants) {
         if (!tenant.tenant_id) continue;
         
+        // PROTEKSI GATING WABA: Skip tenant jika belum CONNECTED (kecuali pilot derma-indonesia)
+        const isConnected = tenant.tenant_id === 'derma-indonesia' || 
+          (tenant.whatsapp_status === 'CONNECTED' && Boolean(tenant.whatsapp_phone_id));
+        
+        if (!isConnected) {
+          continue;
+        }
+
         await tenantStorage.run(tenant.tenant_id, async () => {
           try {
             let phoneId = tenant.whatsapp_phone_id;
-            let token   = tenant.whatsapp_access_token;
+            let token   = tenant.whatsapp_access_token || process.env.WA_ACCESS_TOKEN;
             
-            // Prioritaskan .env untuk legacy tenant (derma-indonesia) agar sama dengan chat.service.js
-            if (tenant.tenant_id === 'derma-indonesia' || !phoneId || !token) {
-               phoneId = process.env.WA_PHONE_ID || process.env.WA_PHONE_NUMBER_ID || phoneId;
-               token   = process.env.WA_ACCESS_TOKEN || token;
+            // Prioritaskan .env untuk legacy pilot tenant (derma-indonesia)
+            if (tenant.tenant_id === 'derma-indonesia') {
+              phoneId = phoneId || process.env.WA_PHONE_ID || process.env.WA_PHONE_NUMBER_ID;
+              token   = token || process.env.WA_ACCESS_TOKEN;
             }
 
             const credentials = {
