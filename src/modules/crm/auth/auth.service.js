@@ -417,6 +417,22 @@ async function resetPassword(token, newPassword) {
     console.warn('[Auth] Gagal mencatat event PasswordResetCompleted:', evtErr.message);
   }
 
+  // Kirim Notifikasi Keamanan ke Admin CRM (Asynchronous)
+  try {
+    const securityAlert = require('./security-alert.service');
+    securityAlert.notifyCredentialChange({
+      dbPool: targetPool,
+      userId: targetUser.id,
+      oldUsername: targetUser.username,
+      newUsername: targetUser.username,
+      isPasswordChanged: true,
+      actor: `Self-Service (via Reset Token)`,
+      reqMeta
+    }).catch(alertErr => console.warn('[Auth] Gagal mengirim alert reset password:', alertErr.message));
+  } catch (alertErr) {
+    console.warn('[Auth] Security alert invoke error:', alertErr.message);
+  }
+
   return { success: true, message: 'Password berhasil diubah. Silakan login kembali.' };
 }
 
@@ -440,9 +456,118 @@ async function getProfile(username) {
   return user || null;
 }
 
-async function changePassword(username, oldPassword, newPassword, actor = null) {
+async function updateProfile(currentUsername, data = {}, actor = null, reqMeta = {}) {
   const [[user]] = await pool.query(
-    'SELECT id, username, password, salt, role FROM users WHERE username = ? LIMIT 1',
+    'SELECT id, username, nama, email, role, status FROM users WHERE username = ? LIMIT 1',
+    [currentUsername]
+  );
+  if (!user) return { success: false, message: 'Pengguna tidak ditemukan.' };
+
+  const clauses = [];
+  const params = [];
+  let isUsernameChanged = false;
+  let oldUsername = user.username;
+  let newUsername = user.username;
+
+  // 1. Cek perubahan nama
+  if (data.nama && String(data.nama).trim() !== '') {
+    clauses.push('nama = ?');
+    params.push(String(data.nama).trim());
+  }
+
+  // 2. Cek perubahan email
+  if (data.email && String(data.email).trim() !== '') {
+    const cleanEmail = String(data.email).trim();
+    // Cek duplikasi email jika email berubah
+    if (cleanEmail.toLowerCase() !== String(user.email || '').toLowerCase()) {
+      const [[dupEmail]] = await pool.query(
+        'SELECT id FROM users WHERE email = ? AND id != ? LIMIT 1',
+        [cleanEmail, user.id]
+      );
+      if (dupEmail) {
+        return { success: false, message: 'Alamat email sudah digunakan oleh akun lain.' };
+      }
+      clauses.push('email = ?');
+      params.push(cleanEmail);
+    }
+  }
+
+  // 3. Cek perubahan username (Deteksi mutasi kredensial)
+  if (data.username && String(data.username).trim() !== '') {
+    const cleanUsername = String(data.username).trim().toLowerCase();
+    if (cleanUsername !== user.username.toLowerCase()) {
+      const [[dupUser]] = await pool.query(
+        'SELECT id FROM users WHERE username = ? AND id != ? LIMIT 1',
+        [cleanUsername, user.id]
+      );
+      if (dupUser) {
+        return { success: false, message: 'Username sudah digunakan oleh akun lain.' };
+      }
+      clauses.push('username = ?');
+      params.push(cleanUsername);
+      isUsernameChanged = true;
+      newUsername = cleanUsername;
+    }
+  }
+
+  if (clauses.length === 0) {
+    return { success: true, message: 'Tidak ada perubahan data.', user };
+  }
+
+  params.push(user.id);
+  await pool.query(`UPDATE users SET ${clauses.join(', ')} WHERE id = ?`, params);
+
+  // Ambil profil yang telah diperbarui
+  const [[updatedUser]] = await pool.query(
+    'SELECT id, username, nama, role, status, email FROM users WHERE id = ? LIMIT 1',
+    [user.id]
+  );
+
+  // Rekam CQRS Immutable Event ke events_log
+  try {
+    const eventId = `EVT-USR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    await pool.query(
+      `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
+       VALUES (?, 'user', ?, 'UserProfileUpdated', ?, ?, NOW())`,
+      [
+        eventId,
+        String(user.id),
+        JSON.stringify({ 
+          oldUsername, 
+          newUsername, 
+          isUsernameChanged, 
+          updatedFields: data 
+        }),
+        actor || currentUsername
+      ]
+    );
+  } catch (evtErr) {
+    console.warn('[Auth] Gagal mencatat event UserProfileUpdated:', evtErr.message);
+  }
+
+  // Trigger Security Alert jika username berubah
+  if (isUsernameChanged) {
+    try {
+      const securityAlert = require('./security-alert.service');
+      securityAlert.notifyCredentialChange({
+        userId: user.id,
+        oldUsername,
+        newUsername,
+        isPasswordChanged: false,
+        actor: actor || currentUsername,
+        reqMeta
+      }).catch(alertErr => console.warn('[Auth] Gagal mengirim alert username changed:', alertErr.message));
+    } catch (alertErr) {
+      console.warn('[Auth] Security alert invoke error:', alertErr.message);
+    }
+  }
+
+  return { success: true, message: 'Profil berhasil diperbarui.', user: updatedUser, usernameChanged: isUsernameChanged };
+}
+
+async function changePassword(username, oldPassword, newPassword, actor = null, reqMeta = {}) {
+  const [[user]] = await pool.query(
+    'SELECT id, username, nama, password, salt, role FROM users WHERE username = ? LIMIT 1',
     [username]
   );
   if (!user) return { success: false, message: 'User tidak ditemukan.' };
@@ -475,7 +600,23 @@ async function changePassword(username, oldPassword, newPassword, actor = null) 
     console.warn('[Auth] Gagal mencatat event UserPasswordChangedSelf:', evtErr.message);
   }
 
+  // Trigger Security Alert ke Email Admin CRM
+  try {
+    const securityAlert = require('./security-alert.service');
+    securityAlert.notifyCredentialChange({
+      userId: user.id,
+      oldUsername: user.username,
+      newUsername: user.username,
+      isPasswordChanged: true,
+      actor: actor || user.nama || user.username || 'Self-Service',
+      reqMeta
+    }).catch(alertErr => console.warn('[Auth] Gagal mengirim alert ganti password:', alertErr.message));
+  } catch (alertErr) {
+    console.warn('[Auth] Security alert invoke error:', alertErr.message);
+  }
+
   return { success: true, message: 'Password berhasil diubah.' };
 }
 
-module.exports = { login, verifyJWT, forgotPassword, resetPassword, getProfile, changePassword };
+module.exports = { login, verifyJWT, forgotPassword, resetPassword, getProfile, updateProfile, changePassword };
+

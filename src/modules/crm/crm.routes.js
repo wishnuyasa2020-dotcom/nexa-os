@@ -32,6 +32,7 @@ router.use(requireAuth);
 // PROFIL SAYA & GANTI PASSWORD (Self-Service)
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/profile', authCtrl.getProfile);
+router.put('/profile', authCtrl.updateProfile);
 router.put('/profile/change-password', authCtrl.changePassword);
 
 // ─────────────────────────────────────────────────────────────────────────────

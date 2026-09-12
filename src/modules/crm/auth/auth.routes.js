@@ -23,6 +23,9 @@ router.get('/me', requireAuth, ctrl.me);
 // GET /api/v1/auth/profile   ← Profile Detail (baru)
 router.get('/profile', requireAuth, ctrl.getProfile);
 
+// PUT /api/v1/auth/profile   ← Update Profile (nama, email, username)
+router.put('/profile', requireAuth, ctrl.updateProfile);
+
 // PUT /api/v1/auth/profile/change-password
 router.put('/profile/change-password', requireAuth, ctrl.changePassword);
 

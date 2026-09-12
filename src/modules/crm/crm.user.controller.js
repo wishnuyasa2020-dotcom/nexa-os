@@ -48,7 +48,11 @@ async function create(req, res) {
 async function update(req, res) {
   try {
     const actor = req.user?.nama || req.user?.username || 'Admin';
-    const data = await svc.updateUser(req.params.id, req.body, actor);
+    const reqMeta = {
+      ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress || req.ip,
+      userAgent: req.headers['user-agent']
+    };
+    const data = await svc.updateUser(req.params.id, req.body, actor, reqMeta);
     res.json({ status: 'ok', data });
   } catch (err) {
     console.error('[users] update Error:', err);
@@ -61,7 +65,11 @@ async function resetPassword(req, res) {
   try {
     const actor = req.user?.nama || req.user?.username || 'Admin';
     const { new_password } = req.body;
-    const data = await svc.resetPassword(req.params.id, new_password, actor);
+    const reqMeta = {
+      ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress || req.ip,
+      userAgent: req.headers['user-agent']
+    };
+    const data = await svc.resetPassword(req.params.id, new_password, actor, reqMeta);
     res.json({ status: 'ok', data });
   } catch (err) {
     console.error('[users] resetPassword Error:', err);

@@ -44,7 +44,11 @@ async function forgotPassword(req, res) {
 async function resetPassword(req, res) {
   try {
     const { token, newPassword } = req.body;
-    const result = await authService.resetPassword(token, newPassword);
+    const reqMeta = {
+      ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress || req.ip,
+      userAgent: req.headers['user-agent']
+    };
+    const result = await authService.resetPassword(token, newPassword, reqMeta);
     if (!result.success) return res.status(400).json({ status: 'error', message: result.message });
     res.json({ status: 'ok', message: result.message });
   } catch (err) {
@@ -57,6 +61,23 @@ async function getProfile(req, res) {
     const data = await authService.getProfile(req.user.username);
     if (!data) return res.status(404).json({ status: 'error', message: 'User tidak ditemukan.' });
     res.json({ status: 'ok', data });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+async function updateProfile(req, res) {
+  try {
+    const actor = req.user?.nama || req.user?.username || 'User';
+    const reqMeta = {
+      ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress || req.ip,
+      userAgent: req.headers['user-agent']
+    };
+    const result = await authService.updateProfile(req.user.username, req.body, actor, reqMeta);
+    if (!result.success) {
+      return res.status(400).json({ status: 'error', message: result.message });
+    }
+    res.json({ status: 'ok', message: result.message, data: result.user, usernameChanged: result.usernameChanged });
   } catch (err) {
     res.status(500).json({ status: 'error', message: err.message });
   }
@@ -76,7 +97,11 @@ async function changePassword(req, res) {
     }
 
     const actor = req.user?.nama || req.user?.username;
-    const result = await authService.changePassword(req.user.username, old_password, new_password, actor);
+    const reqMeta = {
+      ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress || req.ip,
+      userAgent: req.headers['user-agent']
+    };
+    const result = await authService.changePassword(req.user.username, old_password, new_password, actor, reqMeta);
     if (!result.success) {
       return res.status(400).json({ status: 'error', message: result.message });
     }
@@ -86,4 +111,4 @@ async function changePassword(req, res) {
   }
 }
 
-module.exports = { login, me, forgotPassword, resetPassword, getProfile, changePassword };
+module.exports = { login, me, forgotPassword, resetPassword, getProfile, updateProfile, changePassword };

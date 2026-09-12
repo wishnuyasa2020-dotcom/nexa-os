@@ -221,8 +221,8 @@ async function addUser(data, actor = 'System') {
   return { id: result.insertId, username: data.username, email: data.email, nama: data.nama, role: data.role, status };
 }
 
-async function updateUser(id, data, actor = 'System') {
-  const [existing] = await pool.query("SELECT role, status FROM users WHERE id = ? LIMIT 1", [id]);
+async function updateUser(id, data, actor = 'System', reqMeta = {}) {
+  const [existing] = await pool.query("SELECT id, username, nama, email, role, status FROM users WHERE id = ? LIMIT 1", [id]);
   if (existing.length === 0) throw new Error("User tidak ditemukan.");
 
   // Jika mengubah role, atau mengaktifkan user yang sebelumnya nonaktif -> cek limit
@@ -244,6 +244,35 @@ async function updateUser(id, data, actor = 'System') {
 
   const clauses = [];
   const params = [];
+  let usernameChanged = false;
+  let oldUsername = existing[0].username;
+  let newUsername = existing[0].username;
+  let passwordChanged = false;
+
+  // Deteksi & update username
+  if (data.username && String(data.username).trim() !== '') {
+    const cleanUsername = String(data.username).trim().toLowerCase();
+    if (cleanUsername !== String(oldUsername).toLowerCase()) {
+      const [dupUser] = await pool.query("SELECT id FROM users WHERE username = ? AND id != ? LIMIT 1", [cleanUsername, id]);
+      if (dupUser.length > 0) {
+        throw new Error("Username sudah digunakan oleh akun lain.");
+      }
+      clauses.push("username = ?");
+      params.push(cleanUsername);
+      usernameChanged = true;
+      newUsername = cleanUsername;
+    }
+  }
+
+  // Deteksi & update password jika disertakan
+  if (data.password && String(data.password).trim() !== '') {
+    const salt = _generateSalt();
+    const hash = _hashSHA256(data.password, salt);
+    clauses.push("password = ?", "salt = ?");
+    params.push(hash, salt);
+    passwordChanged = true;
+  }
+
   if (data.nama) { clauses.push("nama = ?"); params.push(data.nama); }
   if (data.email) { clauses.push("email = ?"); params.push(data.email); }
   if (data.role) { clauses.push("role = ?"); params.push(data.role); }
@@ -260,6 +289,8 @@ async function updateUser(id, data, actor = 'System') {
     updated_fields: data,
     previous_role: currentRole,
     previous_status: existing[0].status,
+    username_changed: usernameChanged,
+    password_changed: passwordChanged,
     updated_by: actor
   }, actor);
 
@@ -269,20 +300,55 @@ async function updateUser(id, data, actor = 'System') {
     await _logStaffEvent('StaffDeactivated', id, { role: willBeRole, deactivated_by: actor }, actor);
   }
 
-  return { success: true };
+  // Trigger Notifikasi Security Alert ke Admin CRM jika username atau password diubah
+  if (usernameChanged || passwordChanged) {
+    try {
+      const securityAlert = require('./auth/security-alert.service');
+      securityAlert.notifyCredentialChange({
+        userId: id,
+        oldUsername,
+        newUsername,
+        isPasswordChanged: passwordChanged,
+        actor,
+        reqMeta
+      }).catch(alertErr => console.warn('[Users] Gagal mengirim alert update kredensial:', alertErr.message));
+    } catch (alertErr) {
+      console.warn('[Users] Security alert invoke error:', alertErr.message);
+    }
+  }
+
+  return { success: true, usernameChanged, passwordChanged };
 }
 
-async function resetPassword(id, newPassword, actor = 'System') {
+async function resetPassword(id, newPassword, actor = 'System', reqMeta = {}) {
   if (!newPassword) throw new Error("Password baru wajib diisi.");
+
+  const [existing] = await pool.query("SELECT id, username, nama, email, role FROM users WHERE id = ? LIMIT 1", [id]);
+  if (existing.length === 0) throw new Error("User tidak ditemukan.");
 
   const salt = _generateSalt();
   const hash = _hashSHA256(newPassword, salt);
 
-  const [result] = await pool.query("UPDATE users SET password = ?, salt = ? WHERE id = ?", [hash, salt, id]);
+  const [result] = await pool.query("UPDATE users SET password = ?, salt = ?, reset_password_token = NULL, reset_password_expires = NULL WHERE id = ?", [hash, salt, id]);
   if (result.affectedRows === 0) throw new Error("User tidak ditemukan.");
   
   // ── Event-Sourcing: StaffPasswordForceReset ──
   await _logStaffEvent('StaffPasswordForceReset', id, { reset_by: actor }, actor);
+
+  // Trigger Notifikasi Security Alert ke Admin CRM
+  try {
+    const securityAlert = require('./auth/security-alert.service');
+    securityAlert.notifyCredentialChange({
+      userId: id,
+      oldUsername: existing[0].username,
+      newUsername: existing[0].username,
+      isPasswordChanged: true,
+      actor,
+      reqMeta
+    }).catch(alertErr => console.warn('[Users] Gagal mengirim alert force reset password:', alertErr.message));
+  } catch (alertErr) {
+    console.warn('[Users] Security alert invoke error:', alertErr.message);
+  }
 
   return { success: true };
 }
