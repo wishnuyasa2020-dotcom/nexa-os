@@ -124,6 +124,9 @@ router.post('/siswa/batch', siswaCtrl.importBatch);
 // Event-Sourcing Endpoints (Fase 1)
 router.post('/siswa/:id/interactions', siswaCtrl.logInteraction);
 router.post('/siswa/:id/assessments', siswaCtrl.submitAssessment);
+router.post('/siswa/:id/decision-consultation', siswaCtrl.logDecisionConsultation);
+router.get('/home-visit', siswaCtrl.listHomeVisits);
+router.get('/home-visit/prospects', siswaCtrl.getProspectsForConsultation);
 
 
 // AUDIENCE INTAKE — RESTful V1 (PRD modul-intake-audience)

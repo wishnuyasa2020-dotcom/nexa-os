@@ -175,6 +175,39 @@ async function assignKelas(req, res) {
   }
 }
 
+// ── POST /api/v1/siswa/:id/decision-consultation ───────────────────────────
+async function logDecisionConsultation(req, res) {
+  try {
+    const data = await svc.logDecisionConsultation(req.params.id, req.body, req.user);
+    res.status(201).json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[siswa] logDecisionConsultation Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+// ── GET /api/v1/home-visit ─────────────────────────────────────────────────
+async function listHomeVisits(req, res) {
+  try {
+    const data = await svc.listHomeVisits(req.user, req.query);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[siswa] listHomeVisits Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+// ── GET /api/v1/home-visit/prospects ───────────────────────────────────────
+async function getProspectsForConsultation(req, res) {
+  try {
+    const data = await svc.getProspectsForConsultation(req.user, req.query);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[siswa] getProspectsForConsultation Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
 module.exports = {
   getList,
   getDetail,
@@ -190,5 +223,8 @@ module.exports = {
   getSekolahSosialisasi,
   getKelasBySekolah,
   assignKelas,
+  logDecisionConsultation,
+  listHomeVisits,
+  getProspectsForConsultation,
 };
 

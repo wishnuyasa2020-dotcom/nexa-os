@@ -105,7 +105,7 @@ async function listSiswa(user, query = {}) {
   if (!mp || mp === '-') mp = await getActivePeriod();
 
   const page = Math.max(1, parseInt(query.page || '1', 10));
-  const pageSize = 20;
+  const pageSize = Math.min(100, Math.max(1, parseInt(query.pageSize || '20', 10)));
   const offset = (page - 1) * pageSize;
 
   const whereParts = ['sp.marketing_period = ?'];
@@ -119,6 +119,10 @@ async function listSiswa(user, query = {}) {
     params.push(query.cro);
   }
 
+  if (query.sekolahId || query.idSekolah) {
+    whereParts.push('ms.id_sekolah = ?');
+    params.push(query.sekolahId || query.idSekolah);
+  }
   if (query.status)          { whereParts.push('sp.status_terkini = ?');   params.push(query.status); }
   if (query.commercialState) { whereParts.push('sp.commercial_state = ?'); params.push(query.commercialState); }
   if (query.intent)          { whereParts.push('sp.intent = ?');            params.push(query.intent); }
@@ -1062,6 +1066,306 @@ async function assignKelasToCro(payload, user) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/siswa/:id/decision-consultation — Commitment Threshold (Fase 1 Ontologi)
+// Validasi komitmen pengambil keputusan (Orang Tua / Wali)
+// Transisi Otomatis: Prospect ➔ Opportunity
+// ─────────────────────────────────────────────────────────────────────────────
+async function logDecisionConsultation(id, data, user) {
+  let mp = user.selectedPeriod;
+  if (!mp || mp === '-') mp = await getActivePeriod();
+
+  const [periodeRows] = await pool.query(
+    'SELECT sp.*, ms.nama_lengkap, sek.nama_sekolah FROM siswa_periode sp ' +
+    'LEFT JOIN master_siswa ms ON sp.id_siswa = ms.id_siswa ' +
+    'LEFT JOIN master_sekolah sek ON ms.id_sekolah = sek.id_sekolah ' +
+    'WHERE sp.id_siswa = ? AND sp.marketing_period = ?',
+    [id, mp]
+  );
+  if (periodeRows.length === 0) throw new Error('Siswa tidak terdaftar di periode aktif ini.');
+
+  const siswa = periodeRows[0];
+  const {
+    channel = 'Home Visit',
+    nama_wali,
+    peran_wali = 'Orang Tua',
+    hasil_konsultasi,
+    kesepakatan,
+    catatan,
+    next_action,
+    due_date,
+    tanggal,
+  } = data;
+
+  if (!nama_wali || !nama_wali.trim()) {
+    throw new Error('Nama Orang Tua / Wali wajib diisi. Decision Consultation mengharuskan kehadiran pihak pengambil keputusan.');
+  }
+  if (!hasil_konsultasi) {
+    throw new Error('Hasil konsultasi keputusan wajib dipilih.');
+  }
+
+  const validChannels = ['Home Visit', 'Kantor Derma', 'Sekolah Siswa', 'Visit Langsung'];
+  const finalChannel = validChannels.includes(channel) ? channel : 'Home Visit';
+
+  const pjCro = user.role === 'CRO' ? user.nama : (data.pj_cro || siswa.cro || user.nama);
+
+  let newState = siswa.commercial_state || 'Prospect';
+  let newStatus = siswa.status_terkini;
+  let eventType = 'DecisionConsultationCompleted';
+  let hasilAktivitas = '';
+
+  if (hasil_konsultasi === 'Komitmen Disetujui') {
+    // Commitment Threshold terpenuhi! Siswa berhak masuk ke Opportunity
+    newState = 'Opportunity';
+    newStatus = 'Opportunity Terbuka';
+    eventType = 'DecisionConsultationCompleted';
+    hasilAktivitas = 'Komitmen Disetujui (Opportunity)';
+  } else if (hasil_konsultasi === 'Perlu Diskusi Lanjutan') {
+    newStatus = 'Pertimbangan Ortu';
+    eventType = 'DecisionConsultationFollowUp';
+    hasilAktivitas = 'Pertimbangan Ortu (Follow Up)';
+  } else if (hasil_konsultasi === 'Ditolak / Keberatan') {
+    newStatus = 'Keberatan Ortu';
+    eventType = 'DecisionConsultationRejected';
+    hasilAktivitas = 'Ditolak / Keberatan Ortu';
+  } else {
+    hasilAktivitas = hasil_konsultasi;
+  }
+
+  const catatanObj = {
+    nama_wali,
+    peran_wali,
+    kesepakatan: kesepakatan || '',
+    catatan: catatan || '',
+    lokasi_konsultasi: finalChannel
+  };
+  const catatanText = JSON.stringify(catatanObj);
+
+  const tglKonsultasi = tanggal || new Date().toISOString().slice(0, 10);
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // 1. Insert Event Log ke aktivitas_siswa (Append-Only Event Sourcing)
+    await conn.query(`
+      INSERT INTO aktivitas_siswa
+        (id_siswa, jenis_aktivitas, tanggal, hasil_aktivitas, status_sebelum, status_sesudah,
+         next_action, due_date, catatan, pj_cro, event_type, channel)
+      VALUES (?, 'Decision Consultation', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      id,
+      tglKonsultasi,
+      hasilAktivitas,
+      siswa.status_terkini,
+      newStatus,
+      next_action || (hasil_konsultasi === 'Komitmen Disetujui' ? 'Formulir Pendaftaran & DP' : 'Follow Up Ortu'),
+      due_date || null,
+      catatanText,
+      pjCro,
+      eventType,
+      finalChannel
+    ]);
+
+    // 2. Update status komersial dan status operasional di siswa_periode
+    await conn.query(`
+      UPDATE siswa_periode
+      SET commercial_state = ?,
+          status_terkini = ?,
+          intent = 'High',
+          next_action = ?,
+          due_date = IFNULL(?, due_date),
+          last_updated = NOW()
+      WHERE id_siswa = ? AND marketing_period = ?
+    `, [
+      newState,
+      newStatus,
+      next_action || (hasil_konsultasi === 'Komitmen Disetujui' ? 'Formulir Pendaftaran & DP' : 'Follow Up Ortu'),
+      due_date || null,
+      id,
+      mp
+    ]);
+
+    await conn.commit();
+    return {
+      success: true,
+      id_siswa: id,
+      commercialState: newState,
+      status: newStatus,
+      eventType,
+      hasilAktivitas,
+      namaWali: nama_wali
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/home-visit — Daftar Riwayat Home Visit & Konsultasi Ortu
+// ─────────────────────────────────────────────────────────────────────────────
+async function listHomeVisits(user, query = {}) {
+  let mp = query.period || user.selectedPeriod;
+  if (!mp || mp === '-') mp = await getActivePeriod();
+
+  const whereParts = [
+    'aks.marketing_period = ?',
+    "aks.jenis_aktivitas = 'Decision Consultation'"
+  ];
+  const params = [mp];
+
+  if (user.role === 'CRO') {
+    whereParts.push('aks.pj_cro = ?');
+    params.push(user.nama);
+  } else if (query.cro) {
+    whereParts.push('aks.pj_cro = ?');
+    params.push(query.cro);
+  }
+
+  if (query.channel) {
+    whereParts.push('aks.channel = ?');
+    params.push(query.channel);
+  }
+
+  if (query.outcome) {
+    whereParts.push('aks.hasil_aktivitas LIKE ?');
+    params.push(`%${query.outcome}%`);
+  }
+
+  if (query.search) {
+    const s = `%${query.search}%`;
+    whereParts.push('(ms.nama_lengkap LIKE ? OR sek.nama_sekolah LIKE ? OR aks.catatan LIKE ?)');
+    params.push(s, s, s);
+  }
+
+  const where = whereParts.join(' AND ');
+
+  const sql = `
+    SELECT
+      aks.id,
+      aks.id_siswa as idSiswa,
+      IFNULL(ms.nama_lengkap, '') as namaSiswa,
+      IFNULL(sek.nama_sekolah, '') as namaSekolah,
+      IFNULL(mk.nama_kelas, '') as kelas,
+      IFNULL(ms.wa, '') as wa,
+      DATE_FORMAT(aks.tanggal, '%Y-%m-%d') as tanggal,
+      aks.channel,
+      aks.hasil_aktivitas as hasilAktivitas,
+      aks.event_type as eventType,
+      aks.status_sebelum as statusSebelum,
+      aks.status_sesudah as statusSesudah,
+      aks.next_action as nextAction,
+      DATE_FORMAT(aks.due_date, '%Y-%m-%d') as dueDate,
+      aks.catatan,
+      aks.pj_cro as pjCro,
+      IFNULL(sp.commercial_state, 'Prospect') as commercialState
+    FROM aktivitas_siswa aks
+    LEFT JOIN master_siswa ms ON aks.id_siswa = ms.id_siswa
+    LEFT JOIN master_kelas mk ON ms.kelas_id = mk.id
+    LEFT JOIN master_sekolah sek ON ms.id_sekolah = sek.id_sekolah
+    LEFT JOIN siswa_periode sp ON (aks.id_siswa = sp.id_siswa AND sp.marketing_period = aks.marketing_period)
+    WHERE ${where}
+    ORDER BY aks.tanggal DESC, aks.id DESC
+    LIMIT 100
+  `;
+
+  const [rows] = await pool.query(sql, params);
+
+  // Parse JSON catatan bila ada
+  const formattedRows = rows.map(r => {
+    let parsedCatatan = { nama_wali: '', peran_wali: '', kesepakatan: '', catatan: r.catatan || '' };
+    try {
+      if (r.catatan && r.catatan.startsWith('{')) {
+        parsedCatatan = { ...parsedCatatan, ...JSON.parse(r.catatan) };
+      }
+    } catch {}
+    return {
+      ...r,
+      detailWali: parsedCatatan
+    };
+  });
+
+  // Kalkulasi ringkasan metrik (stats)
+  let komitCount = 0;
+  let followUpCount = 0;
+  let rejectedCount = 0;
+
+  formattedRows.forEach(r => {
+    if (r.eventType === 'DecisionConsultationCompleted' || (r.hasilAktivitas && r.hasilAktivitas.includes('Disetujui'))) {
+      komitCount++;
+    } else if (r.eventType === 'DecisionConsultationFollowUp' || (r.hasilAktivitas && r.hasilAktivitas.includes('Pertimbangan'))) {
+      followUpCount++;
+    } else if (r.eventType === 'DecisionConsultationRejected' || (r.hasilAktivitas && r.hasilAktivitas.includes('Ditolak'))) {
+      rejectedCount++;
+    }
+  });
+
+  const total = formattedRows.length;
+  const conversionRate = total > 0 ? Math.round((komitCount / total) * 100) : 0;
+
+  return {
+    data: formattedRows,
+    stats: {
+      total,
+      komitCount,
+      followUpCount,
+      rejectedCount,
+      conversionRate
+    }
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/home-visit/prospects — Daftar Siswa Eligible untuk Konsultasi
+// ─────────────────────────────────────────────────────────────────────────────
+async function getProspectsForConsultation(user, query = {}) {
+  let mp = query.period || user.selectedPeriod;
+  if (!mp || mp === '-') mp = await getActivePeriod();
+
+  const whereParts = [
+    'sp.marketing_period = ?',
+    "sp.commercial_state IN ('Prospect', 'Lead', 'Opportunity')"
+  ];
+  const params = [mp];
+
+  if (user.role === 'CRO') {
+    whereParts.push('sp.cro = ?');
+    params.push(user.nama);
+  }
+
+  if (query.search) {
+    const s = `%${query.search}%`;
+    whereParts.push('(ms.nama_lengkap LIKE ? OR sek.nama_sekolah LIKE ?)');
+    params.push(s, s);
+  }
+
+  const where = whereParts.join(' AND ');
+
+  const sql = `
+    SELECT
+      sp.id_siswa as id,
+      IFNULL(ms.nama_lengkap, '') as nama,
+      IFNULL(sek.nama_sekolah, '') as namaSekolah,
+      IFNULL(mk.nama_kelas, '') as kelas,
+      IFNULL(ms.wa, '') as wa,
+      IFNULL(sp.commercial_state, 'Prospect') as commercialState,
+      IFNULL(sp.cro, '') as cro
+    FROM siswa_periode sp
+    LEFT JOIN master_siswa ms ON sp.id_siswa = ms.id_siswa
+    LEFT JOIN master_kelas mk ON ms.kelas_id = mk.id
+    LEFT JOIN master_sekolah sek ON ms.id_sekolah = sek.id_sekolah
+    WHERE ${where}
+    ORDER BY sp.commercial_state = 'Prospect' DESC, ms.nama_lengkap ASC
+    LIMIT 100
+  `;
+
+  const [rows] = await pool.query(sql, params);
+  return rows;
+}
+
 module.exports = {
   listSiswa,
   detailSiswa,
@@ -1077,5 +1381,8 @@ module.exports = {
   getSekolahSosialisasiList,
   getKelasBySekolah,
   assignKelasToCro,
+  logDecisionConsultation,
+  listHomeVisits,
+  getProspectsForConsultation,
 };
 
