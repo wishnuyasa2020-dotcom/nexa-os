@@ -299,9 +299,9 @@ async function detailSekolah(id, user, query = {}) {
       IFNULL(ms.kecamatan, '')                               AS kecamatan,
       IFNULL(ms.alamat, '')                                  AS alamat,
       IFNULL(ms.status_sekolah, 'Belum Diketahui')           AS statusAktif,
-      IFNULL(ps.nama, ms.pic_utama)                          AS picNama,
-      IFNULL(ps.no_wa, ms.wa_pic)                            AS picWa,
-      IFNULL(ps.bsuid, '')                                   AS bsuid,
+      IFNULL(ms.pic_utama, '')                               AS picNama,
+      IFNULL(ms.wa_pic, '')                                  AS picWa,
+      ''                                                     AS bsuid,
       IFNULL(sp.pj_sekolah, '')                              AS pjCro,
       IFNULL(sp.jumlah_siswa, 0)                             AS jumlahSiswaKelas12,
       IFNULL(sp.status_terkini, '')                          AS status,
@@ -316,7 +316,6 @@ async function detailSekolah(id, user, query = {}) {
       IFNULL(DATEDIFF(CURDATE(), sp.status_updated_date), 0) AS aging
     FROM sekolah_periode sp
     LEFT JOIN master_sekolah ms ON sp.id_sekolah = ms.id_sekolah
-    LEFT JOIN pic_sekolah ps ON sp.id_sekolah = ps.id_sekolah
     WHERE sp.marketing_period = ? AND sp.id_sekolah = ?
     LIMIT 1
   `, [mp, id]);
