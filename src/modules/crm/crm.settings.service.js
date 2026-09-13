@@ -204,6 +204,9 @@ async function _ensurePaymentSettingsTable() {
       registration_fee DECIMAL(12, 2) NOT NULL DEFAULT 500000.00,
       core_deposit_amount DECIMAL(12, 2) NOT NULL DEFAULT 1500000.00,
       total_program_fee DECIMAL(12, 2) NOT NULL DEFAULT 15000000.00,
+      discount_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+      discount_label VARCHAR(100) NULL,
+      discount_end_date DATE NULL,
       qris_image_url VARCHAR(255) NULL,
       updated_by VARCHAR(100) NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -211,13 +214,30 @@ async function _ensurePaymentSettingsTable() {
     )
   `);
 
+  // Self-healing migration for existing payment_settings table:
+  const columnMigrations = [
+    { col: 'discount_amount',   sql: `ADD COLUMN discount_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00 AFTER total_program_fee` },
+    { col: 'discount_label',    sql: `ADD COLUMN discount_label VARCHAR(100) NULL AFTER discount_amount` },
+    { col: 'discount_end_date', sql: `ADD COLUMN discount_end_date DATE NULL AFTER discount_label` },
+  ];
+  for (const m of columnMigrations) {
+    try {
+      const [cols] = await pool.query(`SHOW COLUMNS FROM payment_settings LIKE '${m.col}'`);
+      if (cols.length === 0) {
+        await pool.query(`ALTER TABLE payment_settings ${m.sql}`);
+      }
+    } catch (err) {
+      console.error(`Error ensuring column ${m.col}:`, err.message);
+    }
+  }
+
   const [rows] = await pool.query('SELECT id FROM payment_settings LIMIT 1');
   if (rows.length === 0) {
     await pool.query(`
       INSERT INTO payment_settings 
-        (bank_name, bank_account_number, bank_account_holder, bank_notes, registration_fee, core_deposit_amount, total_program_fee)
+        (bank_name, bank_account_number, bank_account_holder, bank_notes, registration_fee, core_deposit_amount, total_program_fee, discount_amount, discount_label)
       VALUES 
-        ('BCA', '', '', 'Mohon sertakan nama lengkap calon siswa pada berita transfer.', 500000.00, 1500000.00, 15000000.00)
+        ('BCA', '', '', 'Mohon sertakan nama lengkap calon siswa pada berita transfer.', 500000.00, 1500000.00, 15000000.00, 0.00, '')
     `);
   }
 }
@@ -227,6 +247,9 @@ async function getPaymentConfig() {
   const [rows] = await pool.query('SELECT * FROM payment_settings ORDER BY id ASC LIMIT 1');
   if (rows.length === 0) return null;
   const r = rows[0];
+  const toDateStr = (val) => val
+    ? (val instanceof Date ? val : new Date(val)).toISOString().split('T')[0]
+    : null;
   return {
     id: r.id,
     bankName: r.bank_name,
@@ -236,6 +259,9 @@ async function getPaymentConfig() {
     registrationFee: Number(r.registration_fee) || 500000,
     coreDepositAmount: Number(r.core_deposit_amount) || 1500000,
     totalProgramFee: Number(r.total_program_fee) || 15000000,
+    discountAmount: Number(r.discount_amount !== undefined ? r.discount_amount : r.discount_wave_1) || 0,
+    discountLabel: r.discount_label || '',
+    discountEndDate: toDateStr(r.discount_end_date || r.discount_wave_1_end_date),
     qrisImageUrl: r.qris_image_url || null,
     updatedBy: r.updated_by,
     updatedAt: r.updated_at
@@ -251,26 +277,36 @@ async function updatePaymentConfig(data, actor = null) {
   const registrationFee = Math.max(0, Number(data.registrationFee) || 500000);
   const coreDepositAmount = Math.max(0, Number(data.coreDepositAmount) || 1500000);
   const totalProgramFee = Math.max(0, Number(data.totalProgramFee) || 15000000);
+  const discountAmount = Math.max(0, Number(data.discountAmount !== undefined ? data.discountAmount : data.discountWave1) || 0);
+  const discountLabel = data.discountLabel !== undefined ? String(data.discountLabel).trim() : '';
+  const discountEndDate = data.discountEndDate || null;
   const qrisImageUrl = data.qrisImageUrl || null;
 
   const [existing] = await pool.query('SELECT id FROM payment_settings ORDER BY id ASC LIMIT 1');
   if (existing.length === 0) {
     await pool.query(`
       INSERT INTO payment_settings 
-        (bank_name, bank_account_number, bank_account_holder, bank_notes, registration_fee, core_deposit_amount, total_program_fee, qris_image_url, updated_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [bankName, bankAccountNumber, bankAccountHolder, bankNotes, registrationFee, coreDepositAmount, totalProgramFee, qrisImageUrl, actor]);
+        (bank_name, bank_account_number, bank_account_holder, bank_notes, registration_fee, core_deposit_amount, total_program_fee,
+         discount_amount, discount_label, discount_end_date, qris_image_url, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [bankName, bankAccountNumber, bankAccountHolder, bankNotes, registrationFee, coreDepositAmount, totalProgramFee,
+        discountAmount, discountLabel, discountEndDate, qrisImageUrl, actor]);
   } else {
     await pool.query(`
       UPDATE payment_settings
       SET bank_name = ?, bank_account_number = ?, bank_account_holder = ?, bank_notes = ?,
-          registration_fee = ?, core_deposit_amount = ?, total_program_fee = ?, qris_image_url = ?, updated_by = ?, updated_at = NOW()
+          registration_fee = ?, core_deposit_amount = ?, total_program_fee = ?,
+          discount_amount = ?, discount_label = ?, discount_end_date = ?,
+          qris_image_url = ?, updated_by = ?, updated_at = NOW()
       WHERE id = ?
-    `, [bankName, bankAccountNumber, bankAccountHolder, bankNotes, registrationFee, coreDepositAmount, totalProgramFee, qrisImageUrl, actor, existing[0].id]);
+    `, [bankName, bankAccountNumber, bankAccountHolder, bankNotes, registrationFee, coreDepositAmount, totalProgramFee,
+        discountAmount, discountLabel, discountEndDate,
+        qrisImageUrl, actor, existing[0].id]);
   }
 
   await _recordEvent('PaymentSettingsUpdated', existing[0]?.id || 1, {
-    bankName, bankAccountNumber, bankAccountHolder, registrationFee, coreDepositAmount, totalProgramFee
+    bankName, bankAccountNumber, bankAccountHolder, registrationFee, coreDepositAmount, totalProgramFee,
+    discountAmount, discountLabel, discountEndDate
   }, actor);
 
   return getPaymentConfig();
