@@ -1093,6 +1093,23 @@ async function getKecamatanList() {
 // GET /api/v1/sekolah/utils/cro-list
 // ═══════════════════════════════════════════════════════════════════
 async function getCROList() {
+  // Ambil daftar nama user aktif yang memiliki role CRO atau Chief CRO dari tabel users
+  const [croUsers] = await pool.query(
+    "SELECT DISTINCT nama FROM users WHERE LOWER(status) = 'aktif' AND LOWER(role) IN ('cro', 'chief cro') AND nama IS NOT NULL AND nama != '' ORDER BY nama ASC"
+  );
+  if (croUsers.length > 0) {
+    return croUsers.map(r => r.nama);
+  }
+
+  // Fallback: ambil semua user aktif jika belum ada role spesifik CRO/Chief CRO
+  const [fallbackUsers] = await pool.query(
+    "SELECT DISTINCT nama FROM users WHERE LOWER(status) = 'aktif' AND nama IS NOT NULL AND nama != '' ORDER BY nama ASC"
+  );
+  if (fallbackUsers.length > 0) {
+    return fallbackUsers.map(r => r.nama);
+  }
+
+  // Fallback terakhir ke sekolah_periode jika tabel users belum terisi
   const [rows] = await pool.query(
     "SELECT DISTINCT pj_sekolah AS nama FROM sekolah_periode WHERE pj_sekolah IS NOT NULL AND pj_sekolah != '' ORDER BY pj_sekolah ASC"
   );

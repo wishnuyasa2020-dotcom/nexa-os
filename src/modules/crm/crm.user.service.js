@@ -284,6 +284,27 @@ async function updateUser(id, data, actor = 'System', reqMeta = {}) {
   params.push(id);
   await pool.query(`UPDATE users SET ${clauses.join(", ")} WHERE id = ?`, params);
 
+  // ── Cascade update penugasan relasional jika nama atau username berubah ──
+  const oldNama = existing[0].nama;
+  const newNama = data.nama ? data.nama : oldNama;
+  const namaChanged = Boolean(newNama && oldNama && newNama !== oldNama);
+
+  if (namaChanged || usernameChanged) {
+    const targetsToReplace = [...new Set([oldNama, oldUsername].filter(Boolean))];
+    for (const oldVal of targetsToReplace) {
+      if (oldVal === newNama) continue;
+      try {
+        await pool.query("UPDATE siswa_periode SET cro = ? WHERE cro = ?", [newNama, oldVal]);
+        await pool.query("UPDATE sekolah_periode SET pj_sekolah = ? WHERE pj_sekolah = ?", [newNama, oldVal]);
+        await pool.query("UPDATE master_sekolah SET pj_sekolah = ? WHERE pj_sekolah = ?", [newNama, oldVal]);
+        await pool.query("UPDATE aktivitas_siswa SET pj_cro = ? WHERE pj_cro = ?", [newNama, oldVal]);
+        await pool.query("UPDATE weekly_planning SET cro = ? WHERE cro = ?", [newNama, oldVal]);
+      } catch (cascadeErr) {
+        console.error('[users] Cascade rename error (non-fatal):', cascadeErr.message);
+      }
+    }
+  }
+
   // ── Event-Sourcing: StaffProfileUpdated ──
   await _logStaffEvent('StaffProfileUpdated', id, {
     updated_fields: data,

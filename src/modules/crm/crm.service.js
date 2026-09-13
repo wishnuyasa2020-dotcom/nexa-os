@@ -36,7 +36,7 @@ async function getInitialData(user) {
     ),
     // CRO list (hanya untuk Admin/Manager)
     pool.query(
-      "SELECT username, nama FROM users WHERE LOWER(role) = 'cro' AND LOWER(status) = 'aktif' ORDER BY nama ASC"
+      "SELECT username, nama FROM users WHERE LOWER(role) IN ('cro', 'chief cro') AND LOWER(status) = 'aktif' ORDER BY nama ASC"
     ),
   ]);
 
