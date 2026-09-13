@@ -446,8 +446,13 @@ router.get('/:tenantSlug/reg-token/:token', async (req, res) => {
 
     await tenantStorage.run(tenant.tenant_id, async () => {
       const [rows] = await pool.query(
-        `SELECT rt.token, rt.id_siswa, rt.nama_lengkap, rt.no_wa, rt.status, rt.expires_at
+        `SELECT 
+          rt.token, rt.id_siswa, rt.nama_lengkap, rt.no_wa, rt.status, rt.expires_at,
+          ms.id_sekolah, ms.kelas, ms.minat_awal, ms.rencana_lulus,
+          sek.nama_sekolah
          FROM registration_tokens rt
+         LEFT JOIN master_siswa ms ON ms.id_siswa = rt.id_siswa
+         LEFT JOIN master_sekolah sek ON sek.id_sekolah = ms.id_sekolah
          WHERE rt.token = ? LIMIT 1`,
         [req.params.token]
       );
@@ -474,6 +479,11 @@ router.get('/:tenantSlug/reg-token/:token', async (req, res) => {
           idSiswa: tokenRow.id_siswa,
           namaLengkap: tokenRow.nama_lengkap,
           noWa: tokenRow.no_wa,
+          idSekolah: tokenRow.id_sekolah || null,
+          namaSekolah: tokenRow.nama_sekolah || null,
+          kelas: tokenRow.kelas || null,
+          minatAwal: tokenRow.minat_awal || 'Ya',
+          rencanaLulus: tokenRow.rencana_lulus || 'Kerja',
           tokenStatus: tokenRow.status,
           brandName: tenant.brand_name,
           paymentConfig

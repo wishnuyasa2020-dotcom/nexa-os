@@ -191,7 +191,12 @@ async function detailSiswa(id, user, query = {}) {
     SELECT
       ms.id_siswa, ms.id_sekolah, sek.nama_sekolah as nama_sekolah, ms.nama_lengkap, 
       ms.wa, ms.bsuid, mk.nama_kelas as kelas, ms.minat_awal, ms.rencana_lulus, sp.prioritas,
-      sp.status_terkini, sp.next_action, DATE_FORMAT(sp.due_date, '%Y-%m-%d') as due_date, sp.cro as pj_cro, ms.orangtua_tahu, sp.alasan_tidak_lanjut
+      sp.status_terkini,
+      IFNULL(sp.commercial_state, 'Lead') as commercial_state,
+      IFNULL(sp.intent, 'Mid') as intent,
+      IFNULL(sp.priority_score, 0) as priority_score,
+      sp.next_action, DATE_FORMAT(sp.due_date, '%Y-%m-%d') as due_date,
+      sp.cro, sp.cro as pj_cro, ms.orangtua_tahu, sp.alasan_tidak_lanjut
     FROM master_siswa ms
     LEFT JOIN master_kelas mk ON ms.kelas_id = mk.id
     LEFT JOIN siswa_periode sp ON ms.id_siswa = sp.id_siswa AND sp.marketing_period = ?
@@ -1366,6 +1371,74 @@ async function getProspectsForConsultation(user, query = {}) {
   return rows;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// REGISTRATION TOKEN FOR CRO (Generate/Get Link Personal Siswa)
+// ─────────────────────────────────────────────────────────────────────────────
+async function getOrCreateRegistrationToken(siswaId, user) {
+  // 1. Ambil data siswa
+  const [rows] = await pool.query(
+    `SELECT ms.id_siswa, ms.nama_lengkap, ms.wa
+     FROM master_siswa ms
+     WHERE ms.id_siswa = ? LIMIT 1`,
+    [siswaId]
+  );
+  if (rows.length === 0) {
+    throw new Error('Siswa tidak ditemukan.');
+  }
+  const siswa = rows[0];
+
+  // 2. Pastikan tabel registration_tokens ada (self-healing)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS registration_tokens (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      token VARCHAR(64) NOT NULL UNIQUE,
+      id_siswa VARCHAR(50) NOT NULL,
+      nama_lengkap VARCHAR(200) NOT NULL,
+      no_wa VARCHAR(20) NOT NULL,
+      status ENUM('pending','paid','expired') DEFAULT 'pending',
+      expires_at TIMESTAMP NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_token (token),
+      INDEX idx_siswa (id_siswa)
+    )
+  `);
+
+  // 3. Cek apakah sudah ada token yang status pending dan belum expired
+  const [existing] = await pool.query(
+    `SELECT token, expires_at, status 
+     FROM registration_tokens 
+     WHERE id_siswa = ? AND status = 'pending' AND expires_at > NOW()
+     ORDER BY created_at DESC LIMIT 1`,
+    [siswaId]
+  );
+
+  let token;
+  let expiresAt;
+  if (existing.length > 0) {
+    token = existing[0].token;
+    expiresAt = existing[0].expires_at;
+  } else {
+    token = crypto.randomBytes(20).toString('hex');
+    expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 hari
+    await pool.query(
+      `INSERT INTO registration_tokens (token, id_siswa, nama_lengkap, no_wa, expires_at) 
+       VALUES (?, ?, ?, ?, ?)`,
+      [token, siswa.id_siswa, siswa.nama_lengkap, siswa.wa || '', expiresAt]
+    );
+  }
+
+  const tenantSlug = user?.tenant_id || 'derma';
+  return {
+    token,
+    idSiswa: siswa.id_siswa,
+    namaLengkap: siswa.nama_lengkap,
+    noWa: siswa.wa,
+    expiresAt,
+    tenantSlug,
+    registrationPath: `/daftar/${tenantSlug}?token=${token}`
+  };
+}
+
 module.exports = {
   listSiswa,
   detailSiswa,
@@ -1384,5 +1457,7 @@ module.exports = {
   logDecisionConsultation,
   listHomeVisits,
   getProspectsForConsultation,
+  getOrCreateRegistrationToken,
 };
+
 

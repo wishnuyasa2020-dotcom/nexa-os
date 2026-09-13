@@ -208,6 +208,17 @@ async function getProspectsForConsultation(req, res) {
   }
 }
 
+// ── POST /api/v1/siswa/:id/registration-token ───────────────────────────────
+async function getRegistrationToken(req, res) {
+  try {
+    const data = await svc.getOrCreateRegistrationToken(req.params.id, req.user);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('[siswa] getRegistrationToken Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
 module.exports = {
   getList,
   getDetail,
@@ -226,5 +237,7 @@ module.exports = {
   logDecisionConsultation,
   listHomeVisits,
   getProspectsForConsultation,
+  getRegistrationToken,
 };
+
 

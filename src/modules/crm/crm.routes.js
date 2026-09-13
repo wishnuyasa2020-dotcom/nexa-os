@@ -125,6 +125,7 @@ router.post('/siswa/batch', siswaCtrl.importBatch);
 router.post('/siswa/:id/interactions', siswaCtrl.logInteraction);
 router.post('/siswa/:id/assessments', siswaCtrl.submitAssessment);
 router.post('/siswa/:id/decision-consultation', siswaCtrl.logDecisionConsultation);
+router.post('/siswa/:id/registration-token', siswaCtrl.getRegistrationToken);
 router.get('/home-visit', siswaCtrl.listHomeVisits);
 router.get('/home-visit/prospects', siswaCtrl.getProspectsForConsultation);
 
