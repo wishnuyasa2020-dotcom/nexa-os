@@ -798,11 +798,11 @@ async function logInteraction(id, data, user) {
     // Insert ke aktivitas_siswa dengan event_type dan channel baru
     await conn.query(`
       INSERT INTO aktivitas_siswa
-        (id_siswa, jenis_aktivitas, tanggal, hasil_aktivitas, status_sebelum, status_sesudah,
+        (marketing_period, id_siswa, jenis_aktivitas, tanggal, hasil_aktivitas, status_sebelum, status_sesudah,
          next_action, due_date, catatan, pj_cro, event_type, channel)
-      VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, 'InteractionLogged', ?)
+      VALUES (?, ?, ?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, 'InteractionLogged', ?)
     `, [
-      id, channel || 'WhatsApp', outcome,
+      mp, id, channel || 'WhatsApp', outcome,
       periodeRows[0].status_terkini, periodeRows[0].status_terkini,
       data.next_action || periodeRows[0].next_action,
       due_date || null, catatan || null, pjCro, channel || 'WhatsApp'
@@ -867,11 +867,11 @@ async function submitAssessment(id, data, user) {
     // Insert event ke aktivitas_siswa
     await conn.query(`
       INSERT INTO aktivitas_siswa
-        (id_siswa, jenis_aktivitas, tanggal, hasil_aktivitas, status_sebelum, status_sesudah,
+        (marketing_period, id_siswa, jenis_aktivitas, tanggal, hasil_aktivitas, status_sebelum, status_sesudah,
          next_action, catatan, pj_cro, event_type, channel)
-      VALUES (?, 'Assessment FNAR', CURDATE(), ?, ?, ?, ?, ?, ?, ?, 'Form')
+      VALUES (?, ?, 'Assessment FNAR', CURDATE(), ?, ?, ?, ?, ?, ?, ?, 'Form')
     `, [
-      id,
+      mp, id,
       allPass ? 'Kualifikasi Lulus' : (anyFail ? 'Kualifikasi Gagal' : 'Kualifikasi Parsial'),
       periodeRows[0].status_terkini, newStatus,
       allPass ? 'Konsultasi' : 'Follow Up',
@@ -1155,10 +1155,11 @@ async function logDecisionConsultation(id, data, user) {
     // 1. Insert Event Log ke aktivitas_siswa (Append-Only Event Sourcing)
     await conn.query(`
       INSERT INTO aktivitas_siswa
-        (id_siswa, jenis_aktivitas, tanggal, hasil_aktivitas, status_sebelum, status_sesudah,
+        (marketing_period, id_siswa, jenis_aktivitas, tanggal, hasil_aktivitas, status_sebelum, status_sesudah,
          next_action, due_date, catatan, pj_cro, event_type, channel)
-      VALUES (?, 'Decision Consultation', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, 'Decision Consultation', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
+      mp,
       id,
       tglKonsultasi,
       hasilAktivitas,
@@ -1217,16 +1218,17 @@ async function listHomeVisits(user, query = {}) {
   if (!mp || mp === '-') mp = await getActivePeriod();
 
   const whereParts = [
-    'aks.marketing_period = ?',
+    '(aks.marketing_period = ? OR aks.marketing_period IS NULL)',
     "aks.jenis_aktivitas = 'Decision Consultation'"
   ];
   const params = [mp];
 
-  if (user.role === 'CRO') {
-    whereParts.push('aks.pj_cro = ?');
-    params.push(user.nama);
+  const userRole = (user.role || '').toUpperCase();
+  if (userRole === 'CRO') {
+    whereParts.push('(LOWER(aks.pj_cro) = LOWER(?) OR LOWER(IFNULL(sp.cro, \'\')) = LOWER(?))');
+    params.push(user.nama, user.nama);
   } else if (query.cro) {
-    whereParts.push('aks.pj_cro = ?');
+    whereParts.push('LOWER(aks.pj_cro) = LOWER(?)');
     params.push(query.cro);
   }
 
@@ -1271,13 +1273,13 @@ async function listHomeVisits(user, query = {}) {
     LEFT JOIN master_siswa ms ON aks.id_siswa = ms.id_siswa
     LEFT JOIN master_kelas mk ON ms.kelas_id = mk.id
     LEFT JOIN master_sekolah sek ON ms.id_sekolah = sek.id_sekolah
-    LEFT JOIN siswa_periode sp ON (aks.id_siswa = sp.id_siswa AND sp.marketing_period = aks.marketing_period)
+    LEFT JOIN siswa_periode sp ON (aks.id_siswa = sp.id_siswa AND sp.marketing_period = ?)
     WHERE ${where}
     ORDER BY aks.tanggal DESC, aks.id DESC
     LIMIT 100
   `;
 
-  const [rows] = await pool.query(sql, params);
+  const [rows] = await pool.query(sql, [mp, ...params]);
 
   // Parse JSON catatan bila ada
   const formattedRows = rows.map(r => {
@@ -1336,8 +1338,9 @@ async function getProspectsForConsultation(user, query = {}) {
   ];
   const params = [mp];
 
-  if (user.role === 'CRO') {
-    whereParts.push('sp.cro = ?');
+  const userRole = (user.role || '').toUpperCase();
+  if (userRole === 'CRO') {
+    whereParts.push('LOWER(sp.cro) = LOWER(?)');
     params.push(user.nama);
   }
 
