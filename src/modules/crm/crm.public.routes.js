@@ -349,13 +349,139 @@ router.post('/form-siswa/:sekolahId', async (req, res) => {
 });
 
 // ── PUBLIC PAYMENT & PRICING CONFIG ──────────────────────────────────────────
-// GET /api/public/payment-config — Ambil konfigurasi rekening & biaya untuk formulir publik
+// GET /api/public/payment-config — Ambil konfigurasi rekening & biaya untuk formulir publik (global fallback)
 router.get('/payment-config', async (req, res) => {
   try {
     const config = await settingsSvc.getPaymentConfig();
     res.json({ status: 'ok', data: config });
   } catch (err) {
     console.error('[public/payment-config] Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// GET /:tenantSlug/payment-config — Ambil konfigurasi rekening & biaya per-tenant
+router.get('/:tenantSlug/payment-config', async (req, res) => {
+  try {
+    const tenant = await _lookupTenant(req.params.tenantSlug);
+    if (!tenant) {
+      return res.status(404).json({ status: 'error', message: 'Tenant tidak ditemukan' });
+    }
+    await tenantStorage.run(tenant.tenant_id, async () => {
+      const config = await settingsSvc.getPaymentConfig();
+      res.json({ status: 'ok', data: config });
+    });
+  } catch (err) {
+    console.error('[public/:tenantSlug/payment-config] Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// ── REGISTRATION TOKEN (2-Step Form Resume) ───────────────────────────────────
+// POST /:tenantSlug/reg-token — Simpan Step-1 biodata & buat token untuk resume Step-2
+router.post('/:tenantSlug/reg-token', rateLimiter, async (req, res) => {
+  try {
+    const tenant = await _lookupTenant(req.params.tenantSlug);
+    if (!tenant) {
+      return res.status(404).json({ status: 'error', message: 'Tenant tidak ditemukan' });
+    }
+
+    const { id_siswa, nama_lengkap, no_wa } = req.body;
+    if (!id_siswa || !nama_lengkap) {
+      return res.status(400).json({ status: 'error', message: 'id_siswa & nama_lengkap wajib diisi.' });
+    }
+
+    await tenantStorage.run(tenant.tenant_id, async () => {
+      // Cek apakah siswa ini sudah punya token aktif
+      const [existing] = await pool.query(
+        `SELECT token, status FROM registration_tokens WHERE id_siswa = ? ORDER BY created_at DESC LIMIT 1`,
+        [id_siswa]
+      );
+
+      if (existing.length > 0 && existing[0].status === 'pending') {
+        // Kembalikan token lama yang masih aktif (resume)
+        return res.json({ status: 'ok', data: { token: existing[0].token }, message: 'Token existing ditemukan.' });
+      }
+
+      // Buat token baru
+      const token = crypto.randomBytes(20).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 hari
+
+      // Self-healing: pastikan tabel ada
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS registration_tokens (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          token VARCHAR(64) NOT NULL UNIQUE,
+          id_siswa VARCHAR(50) NOT NULL,
+          nama_lengkap VARCHAR(200) NOT NULL,
+          no_wa VARCHAR(20) NOT NULL,
+          status ENUM('pending','paid','expired') DEFAULT 'pending',
+          expires_at TIMESTAMP NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_token (token),
+          INDEX idx_siswa (id_siswa)
+        )
+      `);
+
+      await pool.query(
+        `INSERT INTO registration_tokens (token, id_siswa, nama_lengkap, no_wa, expires_at) VALUES (?, ?, ?, ?, ?)`,
+        [token, id_siswa, nama_lengkap, no_wa || '', expiresAt]
+      );
+
+      res.status(201).json({ status: 'ok', data: { token }, message: 'Token registrasi dibuat.' });
+    });
+  } catch (err) {
+    console.error('[public/:tenantSlug/reg-token] Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// GET /:tenantSlug/reg-token/:token — Ambil data siswa berdasarkan token (untuk resume Step-2)
+router.get('/:tenantSlug/reg-token/:token', async (req, res) => {
+  try {
+    const tenant = await _lookupTenant(req.params.tenantSlug);
+    if (!tenant) {
+      return res.status(404).json({ status: 'error', message: 'Tenant tidak ditemukan' });
+    }
+
+    await tenantStorage.run(tenant.tenant_id, async () => {
+      const [rows] = await pool.query(
+        `SELECT rt.token, rt.id_siswa, rt.nama_lengkap, rt.no_wa, rt.status, rt.expires_at
+         FROM registration_tokens rt
+         WHERE rt.token = ? LIMIT 1`,
+        [req.params.token]
+      );
+
+      if (rows.length === 0) {
+        return res.status(404).json({ status: 'error', message: 'Token tidak valid atau sudah kedaluwarsa.' });
+      }
+
+      const tokenRow = rows[0];
+      if (tokenRow.status === 'paid') {
+        return res.status(410).json({ status: 'paid', message: 'Pendaftaran ini sudah dikonfirmasi.' });
+      }
+      if (new Date(tokenRow.expires_at) < new Date()) {
+        return res.status(410).json({ status: 'expired', message: 'Link pendaftaran ini sudah kedaluwarsa (7 hari). Silakan mendaftar ulang.' });
+      }
+
+      // Ambil payment config sekaligus
+      const paymentConfig = await settingsSvc.getPaymentConfig();
+
+      res.json({
+        status: 'ok',
+        data: {
+          token: tokenRow.token,
+          idSiswa: tokenRow.id_siswa,
+          namaLengkap: tokenRow.nama_lengkap,
+          noWa: tokenRow.no_wa,
+          tokenStatus: tokenRow.status,
+          brandName: tenant.brand_name,
+          paymentConfig
+        }
+      });
+    });
+  } catch (err) {
+    console.error('[public/:tenantSlug/reg-token/:token] Error:', err);
     res.status(500).json({ status: 'error', message: err.message });
   }
 });
