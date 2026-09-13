@@ -191,6 +191,91 @@ async function deleteKecamatan(id, actor = null) {
   return { success: true };
 }
 
+// ── Payment & Pricing Settings ────────────────────────────────────────────────
+
+async function _ensurePaymentSettingsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payment_settings (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      bank_name VARCHAR(50) NOT NULL DEFAULT 'BCA',
+      bank_account_number VARCHAR(50) NOT NULL DEFAULT '',
+      bank_account_holder VARCHAR(100) NOT NULL DEFAULT '',
+      bank_notes TEXT NULL,
+      registration_fee DECIMAL(12, 2) NOT NULL DEFAULT 500000.00,
+      core_deposit_amount DECIMAL(12, 2) NOT NULL DEFAULT 1500000.00,
+      total_program_fee DECIMAL(12, 2) NOT NULL DEFAULT 15000000.00,
+      qris_image_url VARCHAR(255) NULL,
+      updated_by VARCHAR(100) NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+
+  const [rows] = await pool.query('SELECT id FROM payment_settings LIMIT 1');
+  if (rows.length === 0) {
+    await pool.query(`
+      INSERT INTO payment_settings 
+        (bank_name, bank_account_number, bank_account_holder, bank_notes, registration_fee, core_deposit_amount, total_program_fee)
+      VALUES 
+        ('BCA', '', '', 'Mohon sertakan nama lengkap calon siswa pada berita transfer.', 500000.00, 1500000.00, 15000000.00)
+    `);
+  }
+}
+
+async function getPaymentConfig() {
+  await _ensurePaymentSettingsTable();
+  const [rows] = await pool.query('SELECT * FROM payment_settings ORDER BY id ASC LIMIT 1');
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  return {
+    id: r.id,
+    bankName: r.bank_name,
+    bankAccountNumber: r.bank_account_number,
+    bankAccountHolder: r.bank_account_holder,
+    bankNotes: r.bank_notes || '',
+    registrationFee: Number(r.registration_fee) || 500000,
+    coreDepositAmount: Number(r.core_deposit_amount) || 1500000,
+    totalProgramFee: Number(r.total_program_fee) || 15000000,
+    qrisImageUrl: r.qris_image_url || null,
+    updatedBy: r.updated_by,
+    updatedAt: r.updated_at
+  };
+}
+
+async function updatePaymentConfig(data, actor = null) {
+  await _ensurePaymentSettingsTable();
+  const bankName = data.bankName || 'BCA';
+  const bankAccountNumber = String(data.bankAccountNumber || '').trim();
+  const bankAccountHolder = String(data.bankAccountHolder || '').trim();
+  const bankNotes = data.bankNotes !== undefined ? String(data.bankNotes).trim() : '';
+  const registrationFee = Math.max(0, Number(data.registrationFee) || 500000);
+  const coreDepositAmount = Math.max(0, Number(data.coreDepositAmount) || 1500000);
+  const totalProgramFee = Math.max(0, Number(data.totalProgramFee) || 15000000);
+  const qrisImageUrl = data.qrisImageUrl || null;
+
+  const [existing] = await pool.query('SELECT id FROM payment_settings ORDER BY id ASC LIMIT 1');
+  if (existing.length === 0) {
+    await pool.query(`
+      INSERT INTO payment_settings 
+        (bank_name, bank_account_number, bank_account_holder, bank_notes, registration_fee, core_deposit_amount, total_program_fee, qris_image_url, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [bankName, bankAccountNumber, bankAccountHolder, bankNotes, registrationFee, coreDepositAmount, totalProgramFee, qrisImageUrl, actor]);
+  } else {
+    await pool.query(`
+      UPDATE payment_settings
+      SET bank_name = ?, bank_account_number = ?, bank_account_holder = ?, bank_notes = ?,
+          registration_fee = ?, core_deposit_amount = ?, total_program_fee = ?, qris_image_url = ?, updated_by = ?, updated_at = NOW()
+      WHERE id = ?
+    `, [bankName, bankAccountNumber, bankAccountHolder, bankNotes, registrationFee, coreDepositAmount, totalProgramFee, qrisImageUrl, actor, existing[0].id]);
+  }
+
+  await _recordEvent('PaymentSettingsUpdated', existing[0]?.id || 1, {
+    bankName, bankAccountNumber, bankAccountHolder, registrationFee, coreDepositAmount, totalProgramFee
+  }, actor);
+
+  return getPaymentConfig();
+}
+
 module.exports = {
   getKelasMapping,
   addKelasMapping,
@@ -203,5 +288,7 @@ module.exports = {
   getKecamatanList,
   addKecamatan,
   updateKecamatan,
-  deleteKecamatan
+  deleteKecamatan,
+  getPaymentConfig,
+  updatePaymentConfig
 };

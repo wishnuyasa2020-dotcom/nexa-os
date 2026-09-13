@@ -169,6 +169,32 @@ async function deleteKecamatan(req, res) {
   }
 }
 
+// ── Payment & Pricing Settings ────────────────────────────────────────────────
+
+async function getPaymentConfig(req, res) {
+  try {
+    const data = await settingsService.getPaymentConfig();
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('getPaymentConfig Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+async function updatePaymentConfig(req, res) {
+  try {
+    if (!_checkAdminOrManager(req.user)) {
+      return res.status(403).json({ status: 'error', message: 'Hanya Admin atau Manager yang berwenang mengubah rekening dan biaya pendaftaran.' });
+    }
+    const actor = req.user?.nama || req.user?.username;
+    const data = await settingsService.updatePaymentConfig(req.body, actor);
+    res.json({ status: 'ok', message: 'Konfigurasi rekening bank & biaya program berhasil disimpan.', data });
+  } catch (err) {
+    console.error('updatePaymentConfig Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
 module.exports = {
   getKelasMapping,
   addKelasMapping,
@@ -181,5 +207,7 @@ module.exports = {
   getKecamatanList,
   addKecamatan,
   updateKecamatan,
-  deleteKecamatan
+  deleteKecamatan,
+  getPaymentConfig,
+  updatePaymentConfig
 };

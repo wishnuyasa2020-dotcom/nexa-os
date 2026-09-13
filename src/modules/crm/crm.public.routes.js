@@ -10,6 +10,7 @@ const { Router } = require('express');
 const crypto = require('crypto');
 const { pool, mainPool, tenantStorage } = require('../../config/database');
 const siswaSvc = require('./crm.siswa.service');
+const settingsSvc = require('./crm.settings.service');
 const subscriptionCtrl = require('./subscription/subscription.controller');
 
 const router = Router();
@@ -344,6 +345,18 @@ router.post('/form-siswa/:sekolahId', async (req, res) => {
   } catch (err) {
     console.error('[public] form-siswa error:', err);
     res.status(400).json({ status: 'error', message: err.message });
+  }
+});
+
+// ── PUBLIC PAYMENT & PRICING CONFIG ──────────────────────────────────────────
+// GET /api/public/payment-config — Ambil konfigurasi rekening & biaya untuk formulir publik
+router.get('/payment-config', async (req, res) => {
+  try {
+    const config = await settingsSvc.getPaymentConfig();
+    res.json({ status: 'ok', data: config });
+  } catch (err) {
+    console.error('[public/payment-config] Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
   }
 });
 

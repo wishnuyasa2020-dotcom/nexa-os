@@ -371,6 +371,12 @@ router.post('/settings/whatsapp/register', whatsappSettingsCtrl.register);
 router.delete('/settings/whatsapp/disconnect', whatsappSettingsCtrl.disconnect);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS (PAYMENT & PRICING CONFIG)
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/settings/payment-config', settingsCtrl.getPaymentConfig);
+router.put('/settings/payment-config', settingsCtrl.updatePaymentConfig);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SUBSCRIPTION & BILLING (AUTO-UPGRADE TIER VIA MIDTRANS)
 // ─────────────────────────────────────────────────────────────────────────────
 router.use('/subscription', subscriptionRoutes);
