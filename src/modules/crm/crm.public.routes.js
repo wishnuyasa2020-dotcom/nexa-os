@@ -554,6 +554,7 @@ router.get('/:tenantSlug/reg-token/:token', async (req, res) => {
           minatAwal: tokenRow.minat_awal || 'Ya',
           rencanaLulus: tokenRow.rencana_lulus || 'Kerja',
           tokenStatus: tokenRow.status,
+          expiresAt: tokenRow.expires_at,
           brandName: tenant.brand_name,
           paymentConfig,
           nik: tokenRow.nik || '',
