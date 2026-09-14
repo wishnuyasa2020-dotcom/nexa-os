@@ -188,6 +188,30 @@ async function detailSiswa(id, user, query = {}) {
   let mp = query.period || user.selectedPeriod;
   if (!mp || mp === '-') mp = await getActivePeriod();
 
+  // Self-healing: pastikan tabel pendaftaran_siswa ada
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS pendaftaran_siswa (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        id_siswa VARCHAR(50) NOT NULL UNIQUE,
+        nik VARCHAR(20) NULL,
+        gender ENUM('Laki-laki', 'Perempuan') NULL,
+        tanggal_lahir DATE NULL,
+        alamat_lengkap TEXT NULL,
+        nama_program VARCHAR(150) NULL,
+        nama_ortu VARCHAR(150) NULL,
+        wa_ortu VARCHAR(25) NULL,
+        tgl_lahir_ortu DATE NULL,
+        pekerjaan_ortu VARCHAR(50) NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_siswa (id_siswa)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  } catch (tErr) {
+    console.warn('[detailSiswa] Warning creating pendaftaran_siswa table:', tErr.message);
+  }
+
   const [rows] = await pool.query(`
     SELECT
       ms.id_siswa, ms.id_sekolah, sek.nama_sekolah as nama_sekolah, ms.nama_lengkap, 
@@ -197,11 +221,16 @@ async function detailSiswa(id, user, query = {}) {
       IFNULL(sp.intent, 'Mid') as intent,
       IFNULL(sp.priority_score, 0) as priority_score,
       sp.next_action, DATE_FORMAT(sp.due_date, '%Y-%m-%d') as due_date,
-      sp.cro, sp.cro as pj_cro, ms.orangtua_tahu, sp.alasan_tidak_lanjut
+      sp.cro, sp.cro as pj_cro, ms.orangtua_tahu, sp.alasan_tidak_lanjut,
+      ps.nik, ps.gender, DATE_FORMAT(ps.tanggal_lahir, '%Y-%m-%d') as tanggal_lahir,
+      COALESCE(ps.alamat_lengkap, ms.alamat) as alamat_lengkap, ps.nama_program,
+      ps.nama_ortu, ps.wa_ortu, DATE_FORMAT(ps.tgl_lahir_ortu, '%Y-%m-%d') as tgl_lahir_ortu, ps.pekerjaan_ortu,
+      ps.created_at as tgl_daftar_resmi
     FROM master_siswa ms
     LEFT JOIN master_kelas mk ON ms.kelas_id = mk.id
     LEFT JOIN siswa_periode sp ON ms.id_siswa = sp.id_siswa AND sp.marketing_period = ?
     LEFT JOIN master_sekolah sek ON ms.id_sekolah = sek.id_sekolah
+    LEFT JOIN pendaftaran_siswa ps ON ms.id_siswa = ps.id_siswa
     WHERE ms.id_siswa = ?
   `, [mp, id]);
 

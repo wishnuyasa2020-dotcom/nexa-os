@@ -91,6 +91,28 @@ router.get('/:tenantSlug/info', async (req, res) => {
   }
 });
 
+// ── Helper: Self-Healing Table pendaftaran_siswa ─────────────────────────────
+async function _ensurePendaftaranSiswaTable(db) {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS pendaftaran_siswa (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      id_siswa VARCHAR(50) NOT NULL UNIQUE,
+      nik VARCHAR(20) NULL,
+      gender ENUM('Laki-laki', 'Perempuan') NULL,
+      tanggal_lahir DATE NULL,
+      alamat_lengkap TEXT NULL,
+      nama_program VARCHAR(150) NULL,
+      nama_ortu VARCHAR(150) NULL,
+      wa_ortu VARCHAR(25) NULL,
+      tgl_lahir_ortu DATE NULL,
+      pekerjaan_ortu VARCHAR(50) NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_siswa (id_siswa)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+}
+
 // ── GET /:tenantSlug/sekolah — List Sekolah Aktif untuk Dropdown Form ─────────
 router.get('/:tenantSlug/sekolah', async (req, res) => {
   try {
@@ -103,7 +125,7 @@ router.get('/:tenantSlug/sekolah', async (req, res) => {
       const [rows] = await pool.query(
         `SELECT id_sekolah, nama_sekolah, IFNULL(jenjang, 'SMA/SMK') as jenjang 
          FROM master_sekolah 
-         WHERE status = 'aktif' OR status IS NULL 
+         WHERE status_sekolah = 'aktif' OR status_sekolah IS NULL 
          ORDER BY nama_sekolah ASC`
       );
       res.json({ status: 'ok', data: rows });
@@ -131,7 +153,16 @@ router.post('/:tenantSlug/register', rateLimiter, async (req, res) => {
       minat_awal,
       rencana_lulus,
       consent_wa,
-      opt_in_wa
+      opt_in_wa,
+      nik,
+      gender,
+      tanggal_lahir,
+      alamat_lengkap,
+      nama_program,
+      nama_ortu,
+      wa_ortu,
+      tgl_lahir_ortu,
+      pekerjaan_ortu
     } = req.body;
 
     // 1. Validasi Wajib Nama & WhatsApp
@@ -188,7 +219,7 @@ router.post('/:tenantSlug/register', rateLimiter, async (req, res) => {
           } else {
             targetSekolahId = `SEK-${Date.now().toString().slice(-6)}`;
             await conn.query(
-              "INSERT INTO master_sekolah (id_sekolah, nama_sekolah, jenjang, status) VALUES (?, ?, 'SMA/SMK', 'aktif')",
+              "INSERT INTO master_sekolah (id_sekolah, nama_sekolah, jenjang, status_sekolah) VALUES (?, ?, 'SMA/SMK', 'aktif')",
               [targetSekolahId, asal_sekolah.trim()]
             );
           }
@@ -211,12 +242,43 @@ router.post('/:tenantSlug/register', rateLimiter, async (req, res) => {
         const rencana = rencana_lulus || 'Kerja';
         const prioritas = (minat === 'Ya' && rencana === 'Kerja') ? 'Tinggi' : 'Sedang';
 
-        // 1. Insert master_siswa (dengan opt_in_wa = 'Ya')
+        // 1. Insert master_siswa (dengan opt_in_wa = 'Ya' dan alamat jika ada)
         await conn.query(`
           INSERT INTO master_siswa 
-            (id_siswa, id_sekolah, nama_lengkap, wa, kelas_id, minat_awal, rencana_lulus, opt_in_wa, created_date)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'Ya', NOW())
-        `, [idSiswa, targetSekolahId || null, nama_lengkap.trim(), waClean, kelasId, minat, rencana]);
+            (id_siswa, id_sekolah, nama_lengkap, wa, kelas_id, minat_awal, rencana_lulus, alamat, opt_in_wa, created_date)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Ya', NOW())
+        `, [
+          idSiswa,
+          targetSekolahId || null,
+          nama_lengkap.trim(),
+          waClean,
+          kelasId,
+          minat,
+          rencana,
+          alamat_lengkap ? alamat_lengkap.trim() : null
+        ]);
+
+        // 1b. Insert data spesifik ke pendaftaran_siswa
+        if (nik || gender || tanggal_lahir || alamat_lengkap || nama_program || nama_ortu || wa_ortu || tgl_lahir_ortu || pekerjaan_ortu) {
+          await _ensurePendaftaranSiswaTable(conn);
+          const waOrtuClean = wa_ortu ? normalizeWa(wa_ortu) : null;
+          await conn.query(`
+            INSERT INTO pendaftaran_siswa 
+              (id_siswa, nik, gender, tanggal_lahir, alamat_lengkap, nama_program, nama_ortu, wa_ortu, tgl_lahir_ortu, pekerjaan_ortu)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [
+            idSiswa,
+            nik ? nik.trim() : null,
+            gender || null,
+            tanggal_lahir || null,
+            alamat_lengkap ? alamat_lengkap.trim() : null,
+            nama_program ? nama_program.trim() : null,
+            nama_ortu ? nama_ortu.trim() : null,
+            waOrtuClean,
+            tgl_lahir_ortu || null,
+            pekerjaan_ortu || null
+          ]);
+        }
 
         // 2. Insert siswa_periode (Commercial State: 'Known', Status: 'Data Masuk', cro = NULL/Unassigned)
         const idRecord = `SWP-${Date.now().toString().slice(-6)}-${Math.floor(Math.random()*1000)}`;
@@ -445,14 +507,21 @@ router.get('/:tenantSlug/reg-token/:token', async (req, res) => {
     }
 
     await tenantStorage.run(tenant.tenant_id, async () => {
+      // Pastikan tabel pendaftaran_siswa ada
+      await _ensurePendaftaranSiswaTable(pool);
+
       const [rows] = await pool.query(
         `SELECT 
           rt.token, rt.id_siswa, rt.nama_lengkap, rt.no_wa, rt.status, rt.expires_at,
-          ms.id_sekolah, ms.kelas, ms.minat_awal, ms.rencana_lulus,
-          sek.nama_sekolah
+          ms.id_sekolah, ms.kelas, ms.minat_awal, ms.rencana_lulus, ms.alamat,
+          sek.nama_sekolah,
+          ps.nik, ps.gender, DATE_FORMAT(ps.tanggal_lahir, '%Y-%m-%d') as tanggal_lahir,
+          ps.alamat_lengkap, ps.nama_program, ps.nama_ortu, ps.wa_ortu,
+          DATE_FORMAT(ps.tgl_lahir_ortu, '%Y-%m-%d') as tgl_lahir_ortu, ps.pekerjaan_ortu
          FROM registration_tokens rt
          LEFT JOIN master_siswa ms ON ms.id_siswa = rt.id_siswa
          LEFT JOIN master_sekolah sek ON sek.id_sekolah = ms.id_sekolah
+         LEFT JOIN pendaftaran_siswa ps ON ps.id_siswa = rt.id_siswa
          WHERE rt.token = ? LIMIT 1`,
         [req.params.token]
       );
@@ -469,7 +538,7 @@ router.get('/:tenantSlug/reg-token/:token', async (req, res) => {
         return res.status(410).json({ status: 'expired', message: 'Link pendaftaran ini sudah kedaluwarsa (7 hari). Silakan mendaftar ulang.' });
       }
 
-      // Ambil payment config sekaligus
+      // Ambil payment config sekaligus (termasuk list program)
       const paymentConfig = await settingsSvc.getPaymentConfig();
 
       res.json({
@@ -486,12 +555,157 @@ router.get('/:tenantSlug/reg-token/:token', async (req, res) => {
           rencanaLulus: tokenRow.rencana_lulus || 'Kerja',
           tokenStatus: tokenRow.status,
           brandName: tenant.brand_name,
-          paymentConfig
+          paymentConfig,
+          nik: tokenRow.nik || '',
+          gender: tokenRow.gender || '',
+          tanggalLahir: tokenRow.tanggal_lahir || '',
+          alamatLengkap: tokenRow.alamat_lengkap || tokenRow.alamat || '',
+          namaProgram: tokenRow.nama_program || '',
+          namaOrtu: tokenRow.nama_ortu || '',
+          waOrtu: tokenRow.wa_ortu || '',
+          tglLahirOrtu: tokenRow.tgl_lahir_ortu || '',
+          pekerjaanOrtu: tokenRow.pekerjaan_ortu || '',
+          programs: paymentConfig?.programs || []
         }
       });
     });
   } catch (err) {
     console.error('[public/:tenantSlug/reg-token/:token] Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// PUT /:tenantSlug/reg-token/:token — Update biodata siswa & orang tua dari form pendaftaran (Mode Edit)
+router.put('/:tenantSlug/reg-token/:token', rateLimiter, async (req, res) => {
+  try {
+    const tenant = await _lookupTenant(req.params.tenantSlug);
+    if (!tenant) {
+      return res.status(404).json({ status: 'error', message: 'Tenant tidak ditemukan' });
+    }
+
+    const {
+      nama_lengkap,
+      no_wa,
+      id_sekolah,
+      asal_sekolah,
+      nik,
+      gender,
+      tanggal_lahir,
+      alamat_lengkap,
+      nama_program,
+      nama_ortu,
+      wa_ortu,
+      tgl_lahir_ortu,
+      pekerjaan_ortu
+    } = req.body;
+
+    await tenantStorage.run(tenant.tenant_id, async () => {
+      await _ensurePendaftaranSiswaTable(pool);
+
+      const [tokens] = await pool.query(
+        `SELECT id_siswa, status, expires_at FROM registration_tokens WHERE token = ? LIMIT 1`,
+        [req.params.token]
+      );
+
+      if (tokens.length === 0) {
+        return res.status(404).json({ status: 'error', message: 'Token tidak valid.' });
+      }
+
+      const tokenRecord = tokens[0];
+      if (tokenRecord.status === 'paid') {
+        return res.status(400).json({ status: 'error', message: 'Pendaftaran sudah dikonfirmasi dan tidak dapat diubah.' });
+      }
+
+      const idSiswa = tokenRecord.id_siswa;
+
+      // 1. Resolve id_sekolah jika ada perubahan atau sekolah baru
+      let targetSekolahId = id_sekolah;
+      if (!targetSekolahId && asal_sekolah && asal_sekolah.trim()) {
+        const [sekRows] = await pool.query(
+          "SELECT id_sekolah FROM master_sekolah WHERE nama_sekolah = ? LIMIT 1",
+          [asal_sekolah.trim()]
+        );
+        if (sekRows.length > 0) {
+          targetSekolahId = sekRows[0].id_sekolah;
+        } else {
+          targetSekolahId = `SEK-${Date.now().toString().slice(-6)}`;
+          await pool.query(
+            "INSERT INTO master_sekolah (id_sekolah, nama_sekolah, jenjang, status_sekolah) VALUES (?, ?, 'SMA/SMK', 'aktif')",
+            [targetSekolahId, asal_sekolah.trim()]
+          );
+        }
+      }
+
+      // 2. Update master_siswa (sinkronisasi nama, kontak, sekolah, alamat)
+      const waClean = no_wa ? normalizeWa(no_wa) : null;
+      await pool.query(`
+        UPDATE master_siswa 
+        SET 
+          nama_lengkap = COALESCE(?, nama_lengkap),
+          wa = COALESCE(?, wa),
+          id_sekolah = COALESCE(?, id_sekolah),
+          alamat = COALESCE(?, alamat),
+          last_updated = NOW()
+        WHERE id_siswa = ?
+      `, [
+        nama_lengkap ? nama_lengkap.trim() : null,
+        waClean,
+        targetSekolahId || null,
+        alamat_lengkap ? alamat_lengkap.trim() : null,
+        idSiswa
+      ]);
+
+      // Update juga di registration_tokens jika ada
+      if (nama_lengkap || waClean) {
+        await pool.query(`
+          UPDATE registration_tokens
+          SET 
+            nama_lengkap = COALESCE(?, nama_lengkap),
+            no_wa = COALESCE(?, no_wa)
+          WHERE token = ?
+        `, [nama_lengkap ? nama_lengkap.trim() : null, waClean, req.params.token]);
+      }
+
+      // 3. Upsert data ke pendaftaran_siswa
+      const tglLahirVal = (tanggal_lahir && tanggal_lahir.trim()) ? tanggal_lahir.trim() : null;
+      const tglLahirOrtuVal = (tgl_lahir_ortu && tgl_lahir_ortu.trim()) ? tgl_lahir_ortu.trim() : null;
+      const waOrtuClean = wa_ortu ? normalizeWa(wa_ortu) : null;
+
+      await pool.query(`
+        INSERT INTO pendaftaran_siswa 
+          (id_siswa, nik, gender, tanggal_lahir, alamat_lengkap, nama_program, nama_ortu, wa_ortu, tgl_lahir_ortu, pekerjaan_ortu)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          nik = VALUES(nik),
+          gender = VALUES(gender),
+          tanggal_lahir = VALUES(tanggal_lahir),
+          alamat_lengkap = VALUES(alamat_lengkap),
+          nama_program = VALUES(nama_program),
+          nama_ortu = VALUES(nama_ortu),
+          wa_ortu = VALUES(wa_ortu),
+          tgl_lahir_ortu = VALUES(tgl_lahir_ortu),
+          pekerjaan_ortu = VALUES(pekerjaan_ortu),
+          updated_at = NOW()
+      `, [
+        idSiswa,
+        nik ? nik.trim() : null,
+        gender || null,
+        tglLahirVal,
+        alamat_lengkap ? alamat_lengkap.trim() : null,
+        nama_program ? nama_program.trim() : null,
+        nama_ortu ? nama_ortu.trim() : null,
+        waOrtuClean,
+        tglLahirOrtuVal,
+        pekerjaan_ortu || null
+      ]);
+
+      res.json({
+        status: 'ok',
+        message: 'Data pendaftaran siswa dan orang tua berhasil diperbarui.'
+      });
+    });
+  } catch (err) {
+    console.error('[public/:tenantSlug/reg-token/:token PUT] Error:', err);
     res.status(500).json({ status: 'error', message: err.message });
   }
 });

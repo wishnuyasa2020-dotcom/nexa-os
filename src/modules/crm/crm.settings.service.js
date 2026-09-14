@@ -219,6 +219,7 @@ async function _ensurePaymentSettingsTable() {
     { col: 'discount_amount',   sql: `ADD COLUMN discount_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00 AFTER total_program_fee` },
     { col: 'discount_label',    sql: `ADD COLUMN discount_label VARCHAR(100) NULL AFTER discount_amount` },
     { col: 'discount_end_date', sql: `ADD COLUMN discount_end_date DATE NULL AFTER discount_label` },
+    { col: 'program_names',     sql: `ADD COLUMN program_names TEXT NULL AFTER discount_end_date` },
   ];
   for (const m of columnMigrations) {
     try {
@@ -235,9 +236,9 @@ async function _ensurePaymentSettingsTable() {
   if (rows.length === 0) {
     await pool.query(`
       INSERT INTO payment_settings 
-        (bank_name, bank_account_number, bank_account_holder, bank_notes, registration_fee, core_deposit_amount, total_program_fee, discount_amount, discount_label)
+        (bank_name, bank_account_number, bank_account_holder, bank_notes, registration_fee, core_deposit_amount, total_program_fee, discount_amount, discount_label, program_names)
       VALUES 
-        ('BCA', '', '', 'Mohon sertakan nama lengkap calon siswa pada berita transfer.', 500000.00, 1500000.00, 15000000.00, 0.00, '')
+        ('BCA', '', '', 'Mohon sertakan nama lengkap calon siswa pada berita transfer.', 500000.00, 1500000.00, 15000000.00, 0.00, '', '')
     `);
   }
 }
@@ -250,6 +251,12 @@ async function getPaymentConfig() {
   const toDateStr = (val) => val
     ? (val instanceof Date ? val : new Date(val)).toISOString().split('T')[0]
     : null;
+
+  const rawPrograms = r.program_names || '';
+  const programs = rawPrograms
+    ? rawPrograms.split(/[\n,]/).map(p => p.trim()).filter(Boolean)
+    : [];
+
   return {
     id: r.id,
     bankName: r.bank_name,
@@ -262,6 +269,8 @@ async function getPaymentConfig() {
     discountAmount: Number(r.discount_amount !== undefined ? r.discount_amount : r.discount_wave_1) || 0,
     discountLabel: r.discount_label || '',
     discountEndDate: toDateStr(r.discount_end_date || r.discount_wave_1_end_date),
+    programNames: rawPrograms,
+    programs,
     qrisImageUrl: r.qris_image_url || null,
     updatedBy: r.updated_by,
     updatedAt: r.updated_at
@@ -280,6 +289,7 @@ async function updatePaymentConfig(data, actor = null) {
   const discountAmount = Math.max(0, Number(data.discountAmount !== undefined ? data.discountAmount : data.discountWave1) || 0);
   const discountLabel = data.discountLabel !== undefined ? String(data.discountLabel).trim() : '';
   const discountEndDate = data.discountEndDate || null;
+  const programNames = data.programNames !== undefined ? String(data.programNames).trim() : '';
   const qrisImageUrl = data.qrisImageUrl || null;
 
   const [existing] = await pool.query('SELECT id FROM payment_settings ORDER BY id ASC LIMIT 1');
@@ -287,26 +297,26 @@ async function updatePaymentConfig(data, actor = null) {
     await pool.query(`
       INSERT INTO payment_settings 
         (bank_name, bank_account_number, bank_account_holder, bank_notes, registration_fee, core_deposit_amount, total_program_fee,
-         discount_amount, discount_label, discount_end_date, qris_image_url, updated_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         discount_amount, discount_label, discount_end_date, program_names, qris_image_url, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [bankName, bankAccountNumber, bankAccountHolder, bankNotes, registrationFee, coreDepositAmount, totalProgramFee,
-        discountAmount, discountLabel, discountEndDate, qrisImageUrl, actor]);
+        discountAmount, discountLabel, discountEndDate, programNames, qrisImageUrl, actor]);
   } else {
     await pool.query(`
       UPDATE payment_settings
       SET bank_name = ?, bank_account_number = ?, bank_account_holder = ?, bank_notes = ?,
           registration_fee = ?, core_deposit_amount = ?, total_program_fee = ?,
-          discount_amount = ?, discount_label = ?, discount_end_date = ?,
+          discount_amount = ?, discount_label = ?, discount_end_date = ?, program_names = ?,
           qris_image_url = ?, updated_by = ?, updated_at = NOW()
       WHERE id = ?
     `, [bankName, bankAccountNumber, bankAccountHolder, bankNotes, registrationFee, coreDepositAmount, totalProgramFee,
-        discountAmount, discountLabel, discountEndDate,
+        discountAmount, discountLabel, discountEndDate, programNames,
         qrisImageUrl, actor, existing[0].id]);
   }
 
   await _recordEvent('PaymentSettingsUpdated', existing[0]?.id || 1, {
     bankName, bankAccountNumber, bankAccountHolder, registrationFee, coreDepositAmount, totalProgramFee,
-    discountAmount, discountLabel, discountEndDate
+    discountAmount, discountLabel, discountEndDate, programNames
   }, actor);
 
   return getPaymentConfig();
