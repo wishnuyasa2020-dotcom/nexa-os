@@ -60,7 +60,7 @@ function normalizeWa(wa) {
 async function _lookupTenant(slugOrId) {
   if (!slugOrId || !mainPool) return null;
   const [rows] = await mainPool.query(
-    `SELECT t.tenant_id, t.brand_name, t.whatsapp_phone_id, td.db_host, td.db_port, td.db_name, td.db_user, td.db_password
+    `SELECT t.tenant_id, t.brand_name, t.whatsapp_number, t.whatsapp_phone_id, td.db_host, td.db_port, td.db_name, td.db_user, td.db_password
      FROM tenants t
      JOIN tenant_databases td ON t.tenant_id = td.tenant_id
      WHERE (t.tenant_id = ? OR LOWER(t.tenant_id) = LOWER(?) OR LOWER(t.brand_name) = LOWER(?))
@@ -78,12 +78,13 @@ router.get('/:tenantSlug/info', async (req, res) => {
     if (!tenant) {
       return res.status(404).json({ status: 'error', message: 'Tenant tidak ditemukan' });
     }
+    const realWa = tenant.whatsapp_number || (tenant.tenant_id === 'derma-indonesia' ? '6285770400134' : '');
     res.json({
       status: 'ok',
       data: {
         tenantId: tenant.tenant_id,
         brandName: tenant.brand_name,
-        whatsappNumber: tenant.whatsapp_phone_id || ''
+        whatsappNumber: realWa
       }
     });
   } catch (err) {
@@ -556,6 +557,7 @@ router.get('/:tenantSlug/reg-token/:token', async (req, res) => {
           tokenStatus: tokenRow.status,
           expiresAt: tokenRow.expires_at,
           brandName: tenant.brand_name,
+          whatsappNumber: tenant.whatsapp_number || (tenant.tenant_id === 'derma-indonesia' ? '6285770400134' : ''),
           paymentConfig,
           nik: tokenRow.nik || '',
           gender: tokenRow.gender || '',

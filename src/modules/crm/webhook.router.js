@@ -315,6 +315,68 @@ async function handleIncomingMessage(pool, msg, contactMeta, tenantConfig) {
       );
     }
 
+    // ── Payment Proof & Transfer Confirmation Detection (Evidence Layer) ────
+    const isImage = msgType === 'image';
+    const messageContent = String(body || caption || '').toLowerCase();
+    const hasProofKeywords = messageContent.includes('transfer') || 
+                             messageContent.includes('bukti') || 
+                             messageContent.includes('biaya formulir') || 
+                             messageContent.includes('pendaftaran') || 
+                             messageContent.includes('lunas') ||
+                             /[a-f0-9]{32,64}/i.test(messageContent);
+
+    let pendingTokenRecord = null;
+    if (idSiswa) {
+      const [pendTokens] = await conn.query(
+        "SELECT token, status FROM registration_tokens WHERE id_siswa = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+        [idSiswa]
+      );
+      pendingTokenRecord = pendTokens[0] || null;
+    }
+
+    const isProofOfPayment = Boolean((isImage && pendingTokenRecord) || 
+                             (hasProofKeywords && pendingTokenRecord) || 
+                             (isImage && hasProofKeywords));
+
+    if (isProofOfPayment) {
+      const proofPreview = isImage ? '📷 [Bukti Transfer Pendaftaran]' : '💳 [Konfirmasi Transfer Pendaftaran]';
+      await conn.query(
+        'UPDATE conversations SET last_message_prev = ? WHERE conv_id = ?',
+        [proofPreview, convId]
+      );
+
+      const proofEvtId = `EVT-PROOF-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      await conn.query(
+        `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
+         VALUES (?, 'student', ?, 'PaymentProofSubmitted', ?, 'System/WhatsApp', NOW())`,
+        [
+          proofEvtId,
+          String(idSiswa || fromPhone),
+          JSON.stringify({
+            conv_id: convId,
+            id_siswa: idSiswa,
+            token: pendingTokenRecord?.token || null,
+            message_id: metaMessageId,
+            media_id: mediaId,
+            caption: caption || body,
+            from_phone: fromPhone
+          })
+        ]
+      ).catch(e => console.warn(`[Webhook:${tenantConfig.tenantId}] events_log PaymentProofSubmitted error:`, e.message));
+
+      if (idSiswa) {
+        await conn.query(
+          `INSERT INTO aktivitas_siswa 
+             (tanggal, id_siswa, jenis_aktivitas, hasil_aktivitas, status_sebelum, status_sesudah, catatan, event_type, channel)
+           VALUES (CURDATE(), ?, 'Bukti Transfer Dikirim', 'Menunggu Verifikasi', 'Opportunity', 'Opportunity', ?, 'PaymentProofSubmitted', 'WhatsApp')`,
+          [
+            idSiswa,
+            `Siswa mengirimkan bukti transfer via WhatsApp${mediaId ? ' (Lampiran Foto)' : ''}. Menunggu verifikasi tim Finance/Admin.`
+          ]
+        ).catch(e => console.warn(`[Webhook:${tenantConfig.tenantId}] aktivitas_siswa error:`, e.message));
+      }
+    }
+
     // 6. State Machine: Respons Snooze, Consent Withdrawn, atau Positive Wakeup
     if (idSiswa && body) {
       const lowerBody = body.toLowerCase().trim();
@@ -463,10 +525,22 @@ async function handleIncomingMessage(pool, msg, contactMeta, tenantConfig) {
 
         const [subs] = await conn.query('SELECT endpoint, p256dh, auth FROM push_subscriptions');
         if (subs.length > 0) {
+          const titleText = isProofOfPayment 
+            ? `💳 Bukti Transfer: ${fromName}`
+            : `Pesan baru dari ${fromName}`;
+          const bodyText = isProofOfPayment
+            ? `Siswa mengirimkan bukti transfer pendaftaran via WhatsApp. Klik untuk melihat & verifikasi di Live Chat.`
+            : (body ? (body.length > 50 ? body.substring(0, 50) + '...' : body) : `[${msgType}]`);
+
           const payload = JSON.stringify({
-            title: `Pesan baru dari ${fromName}`,
-            body: body ? (body.length > 50 ? body.substring(0, 50) + '...' : body) : `[${msgType}]`,
-            icon: '/nexa-icon.png'
+            title: titleText,
+            body: bodyText,
+            icon: '/nexa-icon.png',
+            data: {
+              convId: convId,
+              url: `/live-chat?convId=${convId}`,
+              isProofOfPayment
+            }
           });
 
           subs.forEach(sub => {

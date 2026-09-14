@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { pool } = require('../../config/database');
+const { syncStudentCurrentState } = require('./student.projection');
 
 /**
  * Catat event immutable ke events_log untuk CQRS & Audit Trail
@@ -322,6 +323,396 @@ async function updatePaymentConfig(data, actor = null) {
   return getPaymentConfig();
 }
 
+// ── Payment Verification (Admin & Manager) ───────────────────────────────────
+
+async function getPaymentVerifications(params = {}) {
+  const status = (params.status || 'all').toLowerCase();
+  const search = (params.search || '').trim();
+
+  let query = `
+    SELECT 
+      rt.id,
+      rt.token,
+      rt.id_siswa,
+      rt.nama_lengkap AS nama_siswa,
+      rt.no_wa,
+      rt.status,
+      rt.expires_at,
+      rt.created_at,
+      ps.nama_program,
+      ps.nama_ortu,
+      ps.wa_ortu,
+      ps.pekerjaan_ortu,
+      COALESCE(sek.nama_sekolah, ms.sekolah_asal) AS nama_sekolah,
+      sp.cro,
+      sp.commercial_state,
+      sp.status_terkini,
+      COALESCE(pay.registration_fee, 500000) AS registration_fee
+    FROM registration_tokens rt
+    LEFT JOIN master_siswa ms ON ms.id_siswa = rt.id_siswa
+    LEFT JOIN master_sekolah sek ON sek.id_sekolah = ms.id_sekolah
+    LEFT JOIN pendaftaran_siswa ps ON ps.id_siswa = rt.id_siswa
+    LEFT JOIN (
+      SELECT sp1.id_siswa, sp1.cro, sp1.commercial_state, sp1.status_terkini
+      FROM siswa_periode sp1
+      INNER JOIN (
+        SELECT id_siswa, MAX(COALESCE(last_updated, created_date)) AS max_date
+        FROM siswa_periode GROUP BY id_siswa
+      ) sp_max ON sp1.id_siswa = sp_max.id_siswa AND COALESCE(sp1.last_updated, sp1.created_date) = sp_max.max_date
+    ) sp ON sp.id_siswa = rt.id_siswa
+    LEFT JOIN (
+      SELECT registration_fee FROM payment_settings LIMIT 1
+    ) pay ON 1=1
+    WHERE 1=1
+  `;
+  const queryParams = [];
+
+  if (status && status !== 'all') {
+    query += ' AND rt.status = ?';
+    queryParams.push(status);
+  }
+
+  if (search) {
+    query += ' AND (rt.nama_lengkap LIKE ? OR rt.no_wa LIKE ? OR rt.id_siswa LIKE ? OR ps.nama_ortu LIKE ?)';
+    const s = `%${search}%`;
+    queryParams.push(s, s, s, s);
+  }
+
+  query += ' ORDER BY rt.created_at DESC LIMIT 100';
+
+  const [rows] = await pool.query(query, queryParams);
+
+  // Ambil summary statistik
+  const [summaryRows] = await pool.query(`
+    SELECT 
+      COUNT(*) AS total_all,
+      SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS total_pending,
+      SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) AS total_paid,
+      SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END) AS total_expired
+    FROM registration_tokens
+  `);
+
+  return {
+    items: rows,
+    summary: summaryRows[0] || { total_all: 0, total_pending: 0, total_paid: 0, total_expired: 0 }
+  };
+}
+
+async function verifyPaymentRegistration(token, data = {}, actor = 'Admin') {
+  if (!token) throw new Error('Token registrasi tidak valid.');
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [tokens] = await conn.query('SELECT * FROM registration_tokens WHERE token = ? FOR UPDATE', [token]);
+    if (tokens.length === 0) {
+      throw new Error('Token pendaftaran tidak ditemukan.');
+    }
+    const tokenRecord = tokens[0];
+    if (tokenRecord.status === 'paid') {
+      throw new Error('Pembayaran untuk token ini sudah terverifikasi sebelumnya.');
+    }
+
+    const idSiswa = tokenRecord.id_siswa;
+    const nominal = Number(data.nominal) || 500000;
+    const paymentMethod = data.paymentMethod || 'Transfer Bank';
+    const notes = data.notes || '';
+
+    // 1. Update status token ke 'paid'
+    await conn.query(
+      "UPDATE registration_tokens SET status = 'paid' WHERE token = ?",
+      [token]
+    );
+
+    // 2. Ambil state siswa terkini di siswa_periode
+    const [spRows] = await conn.query(
+      'SELECT id_record, commercial_state, status_terkini, marketing_period, cro FROM siswa_periode WHERE id_siswa = ? ORDER BY COALESCE(last_updated, created_date) DESC, id_record DESC LIMIT 1',
+      [idSiswa]
+    );
+
+    const prevCommercialState = spRows[0]?.commercial_state || 'Opportunity';
+    const marketingPeriod = spRows[0]?.marketing_period || null;
+    const cro = spRows[0]?.cro || null;
+
+    // 3. Update siswa_periode ke Registered Opportunity & Terdaftar Formulir
+    if (spRows.length > 0) {
+      await conn.query(
+        `UPDATE siswa_periode 
+         SET commercial_state = 'Registered Opportunity',
+             status_terkini = 'Terdaftar Formulir',
+             last_updated = NOW()
+         WHERE id_record = ?`,
+        [spRows[0].id_record]
+      );
+    }
+
+    // 4. Catat event immutable ke events_log
+    const eventId = `EVT-PAY-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    const eventPayload = {
+      id_siswa: idSiswa,
+      nama_siswa: tokenRecord.nama_lengkap,
+      no_wa: tokenRecord.no_wa,
+      token,
+      nominal,
+      payment_method: paymentMethod,
+      payment_type: 'Registration Fee',
+      notes,
+      verified_by: actor,
+      previous_state: prevCommercialState,
+      new_state: 'Registered Opportunity'
+    };
+
+    await conn.query(
+      `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, marketing_period, created_at)
+       VALUES (?, 'student', ?, 'RegistrationFeePaid', ?, ?, ?, NOW())`,
+      [eventId, idSiswa, JSON.stringify(eventPayload), actor, marketingPeriod]
+    );
+
+    // 5. Catat ke aktivitas_siswa (Audit Trail)
+    const [sekRows] = await conn.query(
+      'SELECT ms.sekolah_asal, sek.nama_sekolah FROM master_siswa ms LEFT JOIN master_sekolah sek ON sek.id_sekolah = ms.id_sekolah WHERE ms.id_siswa = ?',
+      [idSiswa]
+    );
+    const idSekolahNama = sekRows[0]?.nama_sekolah || sekRows[0]?.sekolah_asal || null;
+
+    await conn.query(
+      `INSERT INTO aktivitas_siswa 
+         (tanggal, id_siswa, id_sekolah_nama, jenis_aktivitas, hasil_aktivitas, status_sebelum, status_sesudah, catatan, pj_cro, event_type, channel, marketing_period)
+       VALUES (CURDATE(), ?, ?, 'Pembayaran Formulir', 'Verifikasi Berhasil', ?, 'Registered Opportunity', ?, ?, 'RegistrationFeePaid', ?, ?)`,
+      [
+        idSiswa,
+        idSekolahNama,
+        prevCommercialState,
+        `Biaya pendaftaran Rp ${nominal.toLocaleString('id-ID')} diverifikasi oleh ${actor}. Catatan: ${notes || '-'}. Metode: ${paymentMethod}`,
+        cro,
+        paymentMethod,
+        marketingPeriod
+      ]
+    );
+
+    await conn.commit();
+
+    // 6. Sinkronisasi Read-Model Projection (student_current_state)
+    await syncStudentCurrentState(conn, [idSiswa]);
+
+    return {
+      token,
+      id_siswa: idSiswa,
+      nama_siswa: tokenRecord.nama_lengkap,
+      commercial_state: 'Registered Opportunity',
+      status_terkini: 'Terdaftar Formulir',
+      nominal,
+      verified_by: actor
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+async function rejectPaymentRegistration(token, reason = '', actor = 'Admin') {
+  if (!token) throw new Error('Token registrasi tidak valid.');
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [tokens] = await conn.query('SELECT * FROM registration_tokens WHERE token = ? FOR UPDATE', [token]);
+    if (tokens.length === 0) {
+      throw new Error('Token pendaftaran tidak ditemukan.');
+    }
+    const tokenRecord = tokens[0];
+    if (tokenRecord.status === 'paid') {
+      throw new Error('Tidak dapat membatalkan token yang sudah lunas terverifikasi.');
+    }
+
+    await conn.query("UPDATE registration_tokens SET status = 'expired' WHERE token = ?", [token]);
+
+    const eventId = `EVT-REJ-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    await conn.query(
+      `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
+       VALUES (?, 'student', ?, 'RegistrationCancelled', ?, ?, NOW())`,
+      [eventId, tokenRecord.id_siswa, JSON.stringify({ token, reason, actor }), actor]
+    );
+
+    await conn.commit();
+    return { token, status: 'expired', reason };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+async function searchSiswaForPayment(keyword = '') {
+  const q = String(keyword || '').trim();
+  if (!q || q.length < 2) return [];
+
+  const [rows] = await pool.query(`
+    SELECT 
+      ms.id_siswa,
+      ms.nama_lengkap,
+      ms.no_wa,
+      ms.kelas,
+      COALESCE(sek.nama_sekolah, ms.sekolah_asal) AS nama_sekolah,
+      sp.cro,
+      sp.commercial_state,
+      sp.status_terkini,
+      rt.token AS pending_token,
+      rt.status AS token_status
+    FROM master_siswa ms
+    LEFT JOIN master_sekolah sek ON sek.id_sekolah = ms.id_sekolah
+    LEFT JOIN (
+      SELECT sp1.id_siswa, sp1.cro, sp1.commercial_state, sp1.status_terkini
+      FROM siswa_periode sp1
+      INNER JOIN (
+        SELECT id_siswa, MAX(COALESCE(last_updated, created_date)) AS max_date
+        FROM siswa_periode GROUP BY id_siswa
+      ) sp_max ON sp1.id_siswa = sp_max.id_siswa AND COALESCE(sp1.last_updated, sp1.created_date) = sp_max.max_date
+    ) sp ON sp.id_siswa = ms.id_siswa
+    LEFT JOIN (
+      SELECT id_siswa, token, status FROM registration_tokens WHERE status = 'pending' ORDER BY created_at DESC LIMIT 1
+    ) rt ON rt.id_siswa = ms.id_siswa
+    WHERE ms.nama_lengkap LIKE ? OR ms.no_wa LIKE ? OR ms.id_siswa LIKE ?
+    ORDER BY ms.nama_lengkap ASC
+    LIMIT 20
+  `, [`%${q}%`, `%${q}%`, `%${q}%`]);
+
+  return rows;
+}
+
+async function manualVerifySiswaPayment(idSiswa, data = {}, actor = 'Admin') {
+  if (!idSiswa) throw new Error('ID Siswa wajib disertakan.');
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Periksa apakah siswa memiliki pending token
+    const [existingTokens] = await conn.query(
+      "SELECT token, status FROM registration_tokens WHERE id_siswa = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+      [idSiswa]
+    );
+
+    let token = existingTokens[0]?.token;
+
+    if (!token) {
+      // Ambil biodata siswa untuk generate token paid
+      const [studentRows] = await conn.query(
+        'SELECT nama_lengkap, no_wa FROM master_siswa WHERE id_siswa = ?',
+        [idSiswa]
+      );
+      if (studentRows.length === 0) {
+        throw new Error('Data siswa tidak ditemukan.');
+      }
+      token = crypto.randomBytes(20).toString('hex');
+      const nama = studentRows[0].nama_lengkap || 'Siswa';
+      const noWa = studentRows[0].no_wa || '';
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+      await conn.query(
+        `INSERT INTO registration_tokens (token, id_siswa, nama_lengkap, no_wa, status, expires_at, created_at)
+         VALUES (?, ?, ?, ?, 'paid', ?, NOW())`,
+        [token, idSiswa, nama, noWa, expiresAt]
+      );
+    } else {
+      await conn.query("UPDATE registration_tokens SET status = 'paid' WHERE token = ?", [token]);
+    }
+
+    // Ambil state periode
+    const [spRows] = await conn.query(
+      'SELECT id_record, commercial_state, status_terkini, marketing_period, cro FROM siswa_periode WHERE id_siswa = ? ORDER BY COALESCE(last_updated, created_date) DESC, id_record DESC LIMIT 1',
+      [idSiswa]
+    );
+
+    const prevCommercialState = spRows[0]?.commercial_state || 'Opportunity';
+    const marketingPeriod = spRows[0]?.marketing_period || null;
+    const cro = spRows[0]?.cro || null;
+    const nominal = Number(data.nominal) || 500000;
+    const paymentMethod = data.paymentMethod || 'Transfer Bank Manual';
+    const notes = data.notes || '';
+
+    if (spRows.length > 0) {
+      await conn.query(
+        `UPDATE siswa_periode 
+         SET commercial_state = 'Registered Opportunity',
+             status_terkini = 'Terdaftar Formulir',
+             last_updated = NOW()
+         WHERE id_record = ?`,
+        [spRows[0].id_record]
+      );
+    }
+
+    // Insert event immutable
+    const eventId = `EVT-PAY-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    await conn.query(
+      `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, marketing_period, created_at)
+       VALUES (?, 'student', ?, 'RegistrationFeePaid', ?, ?, ?, NOW())`,
+      [
+        eventId,
+        idSiswa,
+        JSON.stringify({
+          id_siswa: idSiswa,
+          token,
+          nominal,
+          payment_method: paymentMethod,
+          payment_type: 'Registration Fee',
+          notes,
+          verified_by: actor,
+          previous_state: prevCommercialState,
+          new_state: 'Registered Opportunity'
+        }),
+        actor,
+        marketingPeriod
+      ]
+    );
+
+    // Insert aktivitas_siswa
+    const [sekRows] = await conn.query(
+      'SELECT ms.sekolah_asal, sek.nama_sekolah FROM master_siswa ms LEFT JOIN master_sekolah sek ON sek.id_sekolah = ms.id_sekolah WHERE ms.id_siswa = ?',
+      [idSiswa]
+    );
+    const idSekolahNama = sekRows[0]?.nama_sekolah || sekRows[0]?.sekolah_asal || null;
+
+    await conn.query(
+      `INSERT INTO aktivitas_siswa 
+         (tanggal, id_siswa, id_sekolah_nama, jenis_aktivitas, hasil_aktivitas, status_sebelum, status_sesudah, catatan, pj_cro, event_type, channel, marketing_period)
+       VALUES (CURDATE(), ?, ?, 'Pembayaran Formulir', 'Verifikasi Berhasil', ?, 'Registered Opportunity', ?, ?, 'RegistrationFeePaid', ?, ?)`,
+      [
+        idSiswa,
+        idSekolahNama,
+        prevCommercialState,
+        `Pembayaran formulir Rp ${nominal.toLocaleString('id-ID')} dicatat manual oleh ${actor}. Catatan: ${notes || '-'}. Metode: ${paymentMethod}`,
+        cro,
+        paymentMethod,
+        marketingPeriod
+      ]
+    );
+
+    await conn.commit();
+
+    await syncStudentCurrentState(conn, [idSiswa]);
+
+    return {
+      token,
+      id_siswa: idSiswa,
+      commercial_state: 'Registered Opportunity',
+      status_terkini: 'Terdaftar Formulir',
+      nominal,
+      verified_by: actor
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
 module.exports = {
   getKelasMapping,
   addKelasMapping,
@@ -336,5 +727,10 @@ module.exports = {
   updateKecamatan,
   deleteKecamatan,
   getPaymentConfig,
-  updatePaymentConfig
+  updatePaymentConfig,
+  getPaymentVerifications,
+  verifyPaymentRegistration,
+  rejectPaymentRegistration,
+  searchSiswaForPayment,
+  manualVerifySiswaPayment
 };

@@ -147,7 +147,9 @@ async function getConversationList(user, query = {}) {
         WHERE cm.conv_id = c.conv_id
           AND cm.direction = 'incoming'
           AND (cm.status IS NULL OR cm.status != 'read')
-       ) AS unread_count
+       ) AS unread_count,
+       (SELECT token FROM registration_tokens rt WHERE rt.id_siswa = c.id_siswa AND rt.status = 'pending' ORDER BY rt.created_at DESC LIMIT 1) AS pending_registration_token,
+       (SELECT COUNT(*) FROM events_log el WHERE el.aggregate_id = c.id_siswa AND el.event_type = 'PaymentProofSubmitted' AND el.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)) AS has_payment_proof
      FROM conversations c
      LEFT JOIN siswa_periode sp ON sp.id_siswa = c.id_siswa
      LEFT JOIN student_current_state scs ON scs.id_siswa = c.id_siswa
@@ -172,6 +174,8 @@ async function getConversationList(user, query = {}) {
 
       return {
         ...r,
+        pending_registration_token: r.pending_registration_token || null,
+        has_payment_proof: Boolean(Number(r.has_payment_proof) > 0),
         window_status: isExpired ? 'CLOSED' : (r.window_status ? String(r.window_status).toUpperCase() : 'CLOSED'),
       };
     }),

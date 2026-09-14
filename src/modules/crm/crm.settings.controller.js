@@ -195,6 +195,76 @@ async function updatePaymentConfig(req, res) {
   }
 }
 
+// ── Payment Verification (Admin & Manager) ───────────────────────────────────
+
+async function getPaymentVerifications(req, res) {
+  try {
+    if (!_checkAdminOrManager(req.user)) {
+      return res.status(403).json({ status: 'error', message: 'Hanya Admin atau Manager yang memiliki hak akses modul Verifikasi Pembayaran.' });
+    }
+    const data = await settingsService.getPaymentVerifications(req.query);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('getPaymentVerifications Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+async function verifyPaymentRegistration(req, res) {
+  try {
+    if (!_checkAdminOrManager(req.user)) {
+      return res.status(403).json({ status: 'error', message: 'Hanya Admin atau Manager yang berwenang memverifikasi pembayaran.' });
+    }
+    const actor = req.user?.nama || req.user?.username || 'Admin';
+    const data = await settingsService.verifyPaymentRegistration(req.params.token, req.body, actor);
+    res.json({ status: 'ok', message: 'Pembayaran formulir pendaftaran berhasil diverifikasi. Status siswa telah beralih ke Registered Opportunity.', data });
+  } catch (err) {
+    console.error('verifyPaymentRegistration Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+async function rejectPaymentRegistration(req, res) {
+  try {
+    if (!_checkAdminOrManager(req.user)) {
+      return res.status(403).json({ status: 'error', message: 'Hanya Admin atau Manager yang berwenang membatalkan pendaftaran.' });
+    }
+    const actor = req.user?.nama || req.user?.username || 'Admin';
+    const data = await settingsService.rejectPaymentRegistration(req.params.token, req.body?.reason, actor);
+    res.json({ status: 'ok', message: 'Pendaftaran / invoice pembayaran berhasil dibatalkan / di-expire.', data });
+  } catch (err) {
+    console.error('rejectPaymentRegistration Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+async function searchSiswaForPayment(req, res) {
+  try {
+    if (!_checkAdminOrManager(req.user)) {
+      return res.status(403).json({ status: 'error', message: 'Hanya Admin atau Manager yang memiliki hak akses pencarian siswa.' });
+    }
+    const data = await settingsService.searchSiswaForPayment(req.query.q);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('searchSiswaForPayment Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+async function manualVerifySiswaPayment(req, res) {
+  try {
+    if (!_checkAdminOrManager(req.user)) {
+      return res.status(403).json({ status: 'error', message: 'Hanya Admin atau Manager yang berwenang memverifikasi pembayaran.' });
+    }
+    const actor = req.user?.nama || req.user?.username || 'Admin';
+    const data = await settingsService.manualVerifySiswaPayment(req.body.id_siswa, req.body, actor);
+    res.json({ status: 'ok', message: 'Pembayaran formulir pendaftaran berhasil dicatat & diverifikasi manual.', data });
+  } catch (err) {
+    console.error('manualVerifySiswaPayment Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
 module.exports = {
   getKelasMapping,
   addKelasMapping,
@@ -209,5 +279,10 @@ module.exports = {
   updateKecamatan,
   deleteKecamatan,
   getPaymentConfig,
-  updatePaymentConfig
+  updatePaymentConfig,
+  getPaymentVerifications,
+  verifyPaymentRegistration,
+  rejectPaymentRegistration,
+  searchSiswaForPayment,
+  manualVerifySiswaPayment
 };

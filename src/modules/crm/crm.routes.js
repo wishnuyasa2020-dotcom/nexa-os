@@ -378,6 +378,15 @@ router.get('/settings/payment-config', settingsCtrl.getPaymentConfig);
 router.put('/settings/payment-config', settingsCtrl.updatePaymentConfig);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS (PAYMENT VERIFICATION - ADMIN & MANAGER)
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/settings/payment-verifications', settingsCtrl.getPaymentVerifications);
+router.get('/settings/payment-verifications/search-siswa', settingsCtrl.searchSiswaForPayment);
+router.post('/settings/payment-verifications/manual-verify', settingsCtrl.manualVerifySiswaPayment);
+router.post('/settings/payment-verifications/:token/verify', settingsCtrl.verifyPaymentRegistration);
+router.post('/settings/payment-verifications/:token/reject', settingsCtrl.rejectPaymentRegistration);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SUBSCRIPTION & BILLING (AUTO-UPGRADE TIER VIA MIDTRANS)
 // ─────────────────────────────────────────────────────────────────────────────
 router.use('/subscription', subscriptionRoutes);
