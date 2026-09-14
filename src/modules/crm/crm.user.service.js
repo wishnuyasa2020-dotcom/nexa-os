@@ -295,6 +295,7 @@ async function updateUser(id, data, actor = 'System', reqMeta = {}) {
       if (oldVal === newNama) continue;
       try {
         await pool.query("UPDATE siswa_periode SET cro = ? WHERE cro = ?", [newNama, oldVal]);
+        await pool.query("UPDATE student_current_state SET cro_assignee = ? WHERE cro_assignee = ?", [newNama, oldVal]);
         await pool.query("UPDATE sekolah_periode SET pj_sekolah = ? WHERE pj_sekolah = ?", [newNama, oldVal]);
         await pool.query("UPDATE master_sekolah SET pj_sekolah = ? WHERE pj_sekolah = ?", [newNama, oldVal]);
         await pool.query("UPDATE aktivitas_siswa SET pj_cro = ? WHERE pj_cro = ?", [newNama, oldVal]);

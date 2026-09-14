@@ -15,6 +15,7 @@
 
 const { Router } = require('express');
 const { mainPool, pool, tenantStorage } = require('../../config/database');
+const { syncStudentCurrentState } = require('./student.projection');
 
 const router = Router();
 
@@ -345,7 +346,7 @@ async function handleIncomingMessage(msg, contactMeta) {
           [idSiswa]
         );
         await conn.query(
-          `UPDATE siswa_periode SET status_terkini = 'Tidak Lanjut', next_action = 'Tidak Ada', alasan_tidak_lanjut = 'Consent Withdrawn' WHERE id_siswa = ?`,
+          `UPDATE siswa_periode SET status_terkini = 'Tidak Lanjut', commercial_state = 'Disqualified', next_action = 'Tidak Ada', alasan_tidak_lanjut = 'Consent Withdrawn' WHERE id_siswa = ?`,
           [idSiswa]
         );
         const eventId = `EVT-WH-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
@@ -383,7 +384,7 @@ async function handleIncomingMessage(msg, contactMeta) {
           [snoozeDate, idSiswa]
         );
         await conn.query(
-          `UPDATE siswa_periode SET status_terkini = 'Data Masuk', next_action = 'Snooze', due_date = NULL WHERE id_siswa = ?`,
+          `UPDATE siswa_periode SET status_terkini = 'Data Masuk', commercial_state = 'Known', next_action = 'Snooze', due_date = NULL WHERE id_siswa = ?`,
           [idSiswa]
         );
         const eventId = `EVT-WH-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
@@ -432,6 +433,7 @@ async function handleIncomingMessage(msg, contactMeta) {
         );
         console.log(`[Webhook:Legacy] Snooze Woke Up untuk siswa: ${idSiswa} (Respons: ${body})`);
       }
+      await syncStudentCurrentState(conn, [idSiswa]);
     }
 
     await conn.commit();

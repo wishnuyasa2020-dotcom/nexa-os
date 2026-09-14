@@ -142,6 +142,7 @@ async function getConversationList(user, query = {}) {
        c.last_msg_ts,
        c.created_at,
        COALESCE(scs.pipeline_state, sp.commercial_state) AS pipeline_status,
+       COALESCE(scs.status_label, sp.status_terkini) AS status_label,
        (SELECT COUNT(*) FROM chat_messages cm
         WHERE cm.conv_id = c.conv_id
           AND cm.direction = 'incoming'
