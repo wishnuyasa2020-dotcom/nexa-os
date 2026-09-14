@@ -7,6 +7,7 @@
 
 const crypto = require('crypto');
 const { pool, mainPool } = require('../../config/database');
+const { syncStudentCurrentState } = require('./student.projection');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER: Cek Kuota Siswa di Main Registry
@@ -336,6 +337,8 @@ async function tambahSiswa(data, user) {
       VALUES (?, ?, ?, ?, 'Data Masuk', 'Known', 'Screening', DATE_ADD(CURDATE(), INTERVAL 1 DAY), ?, ?)
     `, [idRecord, idSiswa, data.nama_lengkap, mp, pjCro, prioritas]);
 
+    await syncStudentCurrentState(conn, [idSiswa]);
+
     // ── Event-Sourcing: LeadAddedManually ──
     const evtLeadId = `EVT-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
     await conn.query(`
@@ -461,6 +464,8 @@ async function editSiswa(id, data, user) {
       await conn.query("UPDATE siswa_periode SET cro = ?, prioritas = ? WHERE id_siswa = ? AND marketing_period = ?", [data.pj_cro, prioritasBaru, id, mp]);
     }
 
+    await syncStudentCurrentState(conn, [id]);
+
     await conn.commit();
     return { id, prioritas: prioritasBaru };
   } catch (err) {
@@ -485,6 +490,7 @@ async function hapusSiswa(id, user) {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
+    await conn.query("DELETE FROM student_current_state WHERE id_siswa = ?", [id]);
     await conn.query("DELETE FROM siswa_periode WHERE id_siswa = ?", [id]);
     await conn.query("DELETE FROM master_siswa WHERE id_siswa = ?", [id]);
     await conn.commit();
@@ -532,11 +538,24 @@ async function inputAktivitas(id, data, user) {
       statusSebelum, statusSesudah, nextAction, dueDate, data.catatan, data.alasan_tidak_lanjut || null, pjCro
     ]);
 
+    let commercialStateUpdate = '';
+    if (statusSesudah === 'Tidak Lanjut') {
+      commercialStateUpdate = ", commercial_state = 'Disqualified'";
+    } else if (statusSesudah === 'Terdaftar') {
+      commercialStateUpdate = ", commercial_state = 'Customer'";
+    } else if (statusSesudah === 'Siap Daftar' || statusSesudah === 'Opportunity Terbuka') {
+      commercialStateUpdate = ", commercial_state = 'Opportunity'";
+    } else if (statusSesudah === 'Prospek Aktif') {
+      commercialStateUpdate = ", commercial_state = 'Prospect'";
+    }
+
     await conn.query(`
       UPDATE siswa_periode 
-      SET status_terkini = ?, next_action = ?, due_date = ?, alasan_tidak_lanjut = ?
+      SET status_terkini = ?, next_action = ?, due_date = ?, alasan_tidak_lanjut = ?${commercialStateUpdate}
       WHERE id_siswa = ? AND marketing_period = ?
     `, [statusSesudah, nextAction, dueDate, data.alasan_tidak_lanjut || null, id, mp]);
+
+    await syncStudentCurrentState(conn, [id]);
 
     await conn.commit();
     return { statusSesudah, nextAction };
@@ -627,6 +646,7 @@ async function importBatch(dataBatch, croName, user) {
   const conn = await pool.getConnection();
   let successCount = 0;
   let skipCount = 0;
+  const insertedIds = [];
 
   try {
     await conn.beginTransaction();
@@ -697,7 +717,12 @@ async function importBatch(dataBatch, croName, user) {
         VALUES (?, ?, ?, ?, 'Data Masuk', 'Known', 'Screening', DATE_ADD(CURDATE(), INTERVAL 1 DAY), ?, ?)
       `, [idRecord, idSiswa, row.nama_lengkap, mp, assignedCro, prioritas]);
 
+      insertedIds.push(idSiswa);
       successCount++;
+    }
+
+    if (insertedIds.length > 0) {
+      await syncStudentCurrentState(conn, insertedIds);
     }
 
     // ── Event-Sourcing: LeadsBulkImported ──
@@ -892,6 +917,8 @@ async function submitAssessment(id, data, user) {
       ]
     );
 
+    await syncStudentCurrentState(conn, [id]);
+
     await conn.commit();
     return { eventType, commercialState: newState, allPass, anyFail };
   } catch (err) {
@@ -1025,6 +1052,8 @@ async function assignKelasToCro(payload, user) {
       SET cro = ?
       WHERE id_siswa IN (?) AND marketing_period = ?
     `, [target_cro, studentIds, mp]);
+
+    await syncStudentCurrentState(conn, studentIds);
 
     // 4. Catat Event Sourcing ke events_log (ClassAssignedToCro)
     const evtId = `EVT-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
@@ -1191,6 +1220,8 @@ async function logDecisionConsultation(id, data, user) {
       id,
       mp
     ]);
+
+    await syncStudentCurrentState(conn, [id]);
 
     await conn.commit();
     return {
@@ -1461,6 +1492,7 @@ module.exports = {
   listHomeVisits,
   getProspectsForConsultation,
   getOrCreateRegistrationToken,
+  syncStudentCurrentState,
 };
 
 
