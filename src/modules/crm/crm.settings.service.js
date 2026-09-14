@@ -343,7 +343,7 @@ async function getPaymentVerifications(params = {}) {
       ps.nama_ortu,
       ps.wa_ortu,
       ps.pekerjaan_ortu,
-      COALESCE(sek.nama_sekolah, ms.sekolah_asal) AS nama_sekolah,
+      sek.nama_sekolah,
       sp.cro,
       sp.commercial_state,
       sp.status_terkini,
@@ -471,10 +471,10 @@ async function verifyPaymentRegistration(token, data = {}, actor = 'Admin') {
 
     // 5. Catat ke aktivitas_siswa (Audit Trail)
     const [sekRows] = await conn.query(
-      'SELECT ms.sekolah_asal, sek.nama_sekolah FROM master_siswa ms LEFT JOIN master_sekolah sek ON sek.id_sekolah = ms.id_sekolah WHERE ms.id_siswa = ?',
+      'SELECT sek.nama_sekolah FROM master_siswa ms LEFT JOIN master_sekolah sek ON sek.id_sekolah = ms.id_sekolah WHERE ms.id_siswa = ?',
       [idSiswa]
     );
-    const idSekolahNama = sekRows[0]?.nama_sekolah || sekRows[0]?.sekolah_asal || null;
+    const idSekolahNama = sekRows[0]?.nama_sekolah || null;
 
     await conn.query(
       `INSERT INTO aktivitas_siswa 
@@ -556,9 +556,9 @@ async function searchSiswaForPayment(keyword = '') {
     SELECT 
       ms.id_siswa,
       ms.nama_lengkap,
-      ms.no_wa,
+      ms.wa AS no_wa,
       ms.kelas,
-      COALESCE(sek.nama_sekolah, ms.sekolah_asal) AS nama_sekolah,
+      sek.nama_sekolah,
       sp.cro,
       sp.commercial_state,
       sp.status_terkini,
@@ -577,7 +577,7 @@ async function searchSiswaForPayment(keyword = '') {
     LEFT JOIN (
       SELECT id_siswa, token, status FROM registration_tokens WHERE status = 'pending' ORDER BY created_at DESC LIMIT 1
     ) rt ON rt.id_siswa = ms.id_siswa
-    WHERE ms.nama_lengkap LIKE ? OR ms.no_wa LIKE ? OR ms.id_siswa LIKE ?
+    WHERE ms.nama_lengkap LIKE ? OR ms.wa LIKE ? OR ms.id_siswa LIKE ?
     ORDER BY ms.nama_lengkap ASC
     LIMIT 20
   `, [`%${q}%`, `%${q}%`, `%${q}%`]);
@@ -603,7 +603,7 @@ async function manualVerifySiswaPayment(idSiswa, data = {}, actor = 'Admin') {
     if (!token) {
       // Ambil biodata siswa untuk generate token paid
       const [studentRows] = await conn.query(
-        'SELECT nama_lengkap, no_wa FROM master_siswa WHERE id_siswa = ?',
+        'SELECT nama_lengkap, wa AS no_wa FROM master_siswa WHERE id_siswa = ?',
         [idSiswa]
       );
       if (studentRows.length === 0) {
@@ -673,10 +673,10 @@ async function manualVerifySiswaPayment(idSiswa, data = {}, actor = 'Admin') {
 
     // Insert aktivitas_siswa
     const [sekRows] = await conn.query(
-      'SELECT ms.sekolah_asal, sek.nama_sekolah FROM master_siswa ms LEFT JOIN master_sekolah sek ON sek.id_sekolah = ms.id_sekolah WHERE ms.id_siswa = ?',
+      'SELECT sek.nama_sekolah FROM master_siswa ms LEFT JOIN master_sekolah sek ON sek.id_sekolah = ms.id_sekolah WHERE ms.id_siswa = ?',
       [idSiswa]
     );
-    const idSekolahNama = sekRows[0]?.nama_sekolah || sekRows[0]?.sekolah_asal || null;
+    const idSekolahNama = sekRows[0]?.nama_sekolah || null;
 
     await conn.query(
       `INSERT INTO aktivitas_siswa 
