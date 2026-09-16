@@ -58,6 +58,8 @@ const KNOWN_VARIABLES = {
   SCHOOL_NAME:       (ctx) => String(ctx.namaSekolah      || '').trim(),
   STUDENT_ID:        (ctx) => String(ctx.idSiswa          || '').trim(),
   // ── Variabel tambahan (v2) ────────────────────────────────
+  TENANT_NAME:       (ctx) => String(ctx.tenantName       || ctx.brandName || '').trim(),
+  BRAND_NAME:        (ctx) => String(ctx.brandName        || ctx.tenantName || '').trim(),
   CONSULTATION_DATE: (ctx) => String(ctx.consultationDate || '').trim(),
   HOME_VISIT_DATE:   (ctx) => String(ctx.homeVisitDate    || '').trim(),
   SNOOZE_LEVEL:      (ctx) => String(ctx.snoozeLevel      !== undefined ? ctx.snoozeLevel : '').trim(),

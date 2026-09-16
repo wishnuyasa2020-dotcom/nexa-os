@@ -501,6 +501,10 @@ function isServiceWindowOpen(lastIncomingTs) {
 // ─────────────────────────────────────────────────────────────────────────────
 function resolveTemplateVariables(tmpl, data = {}) {
   let bodyText = typeof tmpl === 'string' ? tmpl : (tmpl.body_text || '');
+  const tenantBrand = data.tenant_name || data.brand_name || data.tenantName || data.brandName || '';
+  if (tenantBrand) {
+    bodyText = bodyText.replace(/\{\{tenant_name\}\}/g, tenantBrand);
+  }
   let vars = [];
   
   // Jika ini object template dan punya parameters, petakan berdasarkan parameters.body
@@ -512,6 +516,7 @@ function resolveTemplateVariables(tmpl, data = {}) {
           if (paramName === 'STUDENT_NAME') return data.student_name || '';
           if (paramName === 'PHONE_NUMBER') return data.phone || '';
           if (paramName === 'SCHOOL_NAME') return data.school_name || 'Sekolah';
+          if (paramName === 'TENANT_NAME' || paramName === 'BRAND_NAME') return tenantBrand;
           return '';
         });
       }

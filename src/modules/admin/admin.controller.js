@@ -178,6 +178,58 @@ async function templateStats(req, res) {
 }
 
 /**
+ * GET /api/admin/templates/library
+ * Pustaka 27 template master NexaMOS
+ */
+async function getTemplateLibrary(req, res) {
+  try {
+    const data = await adminService.getTemplateLibrary();
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * GET /api/admin/templates/preview-context/:tenantId
+ * Sample data siswa & sekolah riil per tenant untuk WhatsApp Live Simulator
+ */
+async function getTenantPreviewContext(req, res) {
+  try {
+    const data = await adminService.getTenantPreviewContext(req.params.tenantId);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * POST /api/admin/templates/library/deploy/:tenantId
+ * One-Click Deploy 27 template ke satu tenant
+ */
+async function deployLibraryToTenant(req, res) {
+  try {
+    const data = await adminService.deployLibraryToTenant(req.params.tenantId);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * POST /api/admin/templates/library/deploy-all
+ * One-Click Deploy ke semua tenant aktif
+ */
+async function deployLibraryAll(req, res) {
+  try {
+    const data = await adminService.deployLibraryAll();
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
  * GET /api/admin/templates/:tenantId
  * Template list satu tenant (read-only)
  */
@@ -363,6 +415,10 @@ module.exports = {
   activity,
   templateStats,
   templatesByTenant,
+  getTemplateLibrary,
+  getTenantPreviewContext,
+  deployLibraryToTenant,
+  deployLibraryAll,
   billingInvoices,
   markInvoicePaid,
   getDemoStatus,

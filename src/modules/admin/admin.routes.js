@@ -28,10 +28,16 @@ router.get('/users', ctrl.users);
 router.get('/health', ctrl.health);
 router.get('/activity', ctrl.activity);
 
+// Pustaka Template NexaMOS (27 Template Master Library) & Deployer
+router.get('/templates/library',                            ctrl.getTemplateLibrary);
+router.get('/templates/preview-context/:tenantId',          ctrl.getTenantPreviewContext);
+router.post('/templates/library/deploy-all',                ctrl.deployLibraryAll);
+router.post('/templates/library/deploy/:tenantId',          ctrl.deployLibraryToTenant);
+
 // Template Monitor — read-only cross-tenant (nexamos-admin)
-// PENTING: /templates/stats harus SEBELUM /templates/:tenantId
-router.get('/templates/stats',        ctrl.templateStats);
-router.get('/templates/:tenantId',    ctrl.templatesByTenant);
+// PENTING: route spesifik harus SEBELUM /templates/:tenantId
+router.get('/templates/stats',                              ctrl.templateStats);
+router.get('/templates/:tenantId',                          ctrl.templatesByTenant);
 
 // ── Invoices & Subscriptions Management (Superadmin) ─────────
 router.get('/billing/invoices',                      ctrl.billingInvoices);

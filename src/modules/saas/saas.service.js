@@ -901,6 +901,15 @@ async function approveBetaApplication(id, reviewerName = 'Super Admin') {
     await tenantConn.end();
   }
 
+  // 5d. Seeding Pustaka Template Default NexaMOS (27 Template)
+  try {
+    const adminService = require('../admin/admin.service');
+    await adminService.deployLibraryToTenant(tenantId);
+    console.log(`[Beta Provisioning] Berhasil menginjeksi 27 template library ke DB tenant ${tenantId}`);
+  } catch (tmplErr) {
+    console.warn(`[Beta Provisioning] Gagal injeksi template library ke ${tenantId}:`, tmplErr.message);
+  }
+
   // 6. Kirim Email Aktivasi Akun Siap Pakai (Non-blocking)
   const transporter = getEmailTransporter();
   if (transporter) {

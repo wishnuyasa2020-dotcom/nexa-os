@@ -5,6 +5,7 @@ const mysql = require('mysql2/promise');
 const axios = require('axios');
 const { pool, mainPool } = require('../../config/database');
 const nodemailer = require('nodemailer');
+const { DEFAULT_TEMPLATES_LIBRARY } = require('./defaultTemplates.data');
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp.gmail.com',
@@ -366,6 +367,14 @@ async function provisionNewTenant(payload) {
     await dbBaru.end();
   }
 
+  // Auto-seed 27 default templates dari template_library
+  try {
+    await deployLibraryToTenant(tenantId);
+    console.log(`[Provisioning] Berhasil menginjeksi template library ke DB tenant ${tenantId}`);
+  } catch (tmplErr) {
+    console.warn(`[Provisioning] Gagal injeksi template library ke ${tenantId}:`, tmplErr.message);
+  }
+
   // Kirim email kredensial ke Admin
   try {
     const mailOptions = {
@@ -687,6 +696,270 @@ async function getTemplatesByTenant(tenantId) {
     brandName: t.brand_name,
     data: templates.map(r => ({ ...r, meta_status: r.meta_status || 'LOCAL_ONLY' })),
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PUSTAKA TEMPLATE NEXAMOS (Template Library) — Central Management & Deployer
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Memastikan tabel template_library di DB nexamain sudah ada dan terisi 27 template ontologi
+ */
+async function ensureTemplateLibrary() {
+  await mainPool.query(`
+    CREATE TABLE IF NOT EXISTS template_library (
+      id_template VARCHAR(50) NOT NULL PRIMARY KEY,
+      pipeline VARCHAR(50) NOT NULL,
+      nama_template VARCHAR(150) NOT NULL,
+      template_name_api VARCHAR(100) NOT NULL,
+      language_code VARCHAR(10) DEFAULT 'id',
+      body_text TEXT NOT NULL,
+      meta_buttons LONGTEXT NULL,
+      parameters TEXT NULL,
+      kategori VARCHAR(50) NULL,
+      urutan INT DEFAULT 1,
+      status_crm VARCHAR(20) DEFAULT 'ACTIVE',
+      meta_status VARCHAR(20) DEFAULT 'APPROVED',
+      header_type VARCHAR(20) NULL,
+      header_url TEXT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+
+  const [countRows] = await mainPool.query('SELECT COUNT(*) as cnt FROM template_library');
+  if (countRows[0].cnt === 0) {
+    for (const tpl of DEFAULT_TEMPLATES_LIBRARY) {
+      await mainPool.query(`
+        INSERT INTO template_library
+          (id_template, pipeline, nama_template, template_name_api, language_code,
+           body_text, meta_buttons, parameters, kategori, urutan, status_crm, meta_status, header_type, header_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          pipeline = VALUES(pipeline),
+          nama_template = VALUES(nama_template),
+          template_name_api = VALUES(template_name_api),
+          body_text = VALUES(body_text),
+          meta_buttons = VALUES(meta_buttons),
+          parameters = VALUES(parameters),
+          kategori = VALUES(kategori),
+          urutan = VALUES(urutan)
+      `, [
+        tpl.id_template, tpl.pipeline, tpl.nama_template, tpl.template_name_api, tpl.language_code || 'id',
+        tpl.body_text, tpl.meta_buttons || null, tpl.parameters || null, tpl.kategori || null,
+        tpl.urutan || 1, tpl.status_crm || 'ACTIVE', tpl.meta_status || 'APPROVED',
+        tpl.header_type || null, tpl.header_url || null
+      ]);
+    }
+    console.log(`[Template Library] Initialized & seeded ${DEFAULT_TEMPLATES_LIBRARY.length} templates in main DB.`);
+  }
+}
+
+/**
+ * GET /api/admin/templates/library
+ * Mengambil semua 27 template master beserta statistik kategori & daftar tenant
+ */
+async function getTemplateLibrary() {
+  await ensureTemplateLibrary();
+
+  const [templates] = await mainPool.query(
+    'SELECT * FROM template_library ORDER BY urutan ASC, id_template ASC'
+  );
+
+  const pipelineStats = {
+    LEAD: 0,
+    PROSPECT: 0,
+    OPPORTUNITY: 0,
+    REGISTERED_OPPORTUNITY: 0,
+    CUSTOMER: 0,
+    SNOOZE: 0,
+    TOTAL: templates.length
+  };
+
+  templates.forEach(t => {
+    const p = (t.pipeline || '').toUpperCase();
+    if (pipelineStats[p] !== undefined) {
+      pipelineStats[p]++;
+    }
+  });
+
+  const [tenants] = await mainPool.query(
+    `SELECT tenant_id, brand_name, tier, status FROM tenants WHERE status = 'ACTIVE' ORDER BY brand_name ASC`
+  );
+
+  return {
+    templates,
+    pipelineStats,
+    tenants
+  };
+}
+
+/**
+ * GET /api/admin/templates/preview-context/:tenantId
+ * Menyediakan konteks data riil siswa & sekolah per tenant untuk WhatsApp Live Simulator
+ */
+async function getTenantPreviewContext(tenantId) {
+  if (!tenantId || tenantId === 'default') {
+    return {
+      tenantId: 'default',
+      brandName: 'NexaMOS Pilot',
+      sampleStudent: 'Fakhri Khaerul Qolbi',
+      sampleSchool: 'SMK Negeri 1 Surabaya'
+    };
+  }
+
+  const [tRows] = await mainPool.query(
+    `SELECT t.tenant_id, t.brand_name, td.db_host, td.db_port, td.db_name, td.db_user, td.db_password
+     FROM tenants t
+     JOIN tenant_databases td ON t.tenant_id = td.tenant_id
+     WHERE t.tenant_id = ? LIMIT 1`,
+    [tenantId]
+  );
+
+  if (tRows.length === 0) {
+    return {
+      tenantId,
+      brandName: tenantId,
+      sampleStudent: 'Ahmad Rizki',
+      sampleSchool: 'SMA Negeri 1'
+    };
+  }
+
+  const t = tRows[0];
+  let sampleStudent = 'Ahmad Rizki';
+  let sampleSchool = 'SMA Negeri 1';
+
+  try {
+    const conn = await mysql.createConnection({
+      host: t.db_host, port: t.db_port || 3306,
+      user: t.db_user, password: t.db_password, database: t.db_name,
+      connectTimeout: 5000,
+    });
+
+    const [siswaRows] = await conn.query(
+      `SELECT nama_lengkap FROM master_siswa WHERE nama_lengkap IS NOT NULL AND nama_lengkap != '' LIMIT 1`
+    );
+    if (siswaRows.length > 0 && siswaRows[0].nama_lengkap) {
+      sampleStudent = siswaRows[0].nama_lengkap;
+    }
+
+    const [sekolahRows] = await conn.query(
+      `SELECT nama_sekolah FROM master_sekolah WHERE nama_sekolah IS NOT NULL AND nama_sekolah != '' LIMIT 1`
+    );
+    if (sekolahRows.length > 0 && sekolahRows[0].nama_sekolah) {
+      sampleSchool = sekolahRows[0].nama_sekolah;
+    }
+
+    await conn.end();
+  } catch (err) {
+    console.warn(`[getTenantPreviewContext] Warning reading sample data for ${tenantId}: ${err.message}`);
+  }
+
+  return {
+    tenantId: t.tenant_id,
+    brandName: t.brand_name || t.tenant_id,
+    sampleStudent,
+    sampleSchool
+  };
+}
+
+/**
+ * POST /api/admin/templates/library/deploy/:tenantId
+ * Menyalin 27 template default ke tabel wa_templates database tenant dengan mengganti {{tenant_name}}
+ */
+async function deployLibraryToTenant(tenantId) {
+  await ensureTemplateLibrary();
+
+  const [tRows] = await mainPool.query(
+    `SELECT t.tenant_id, t.brand_name, td.db_host, td.db_port, td.db_name, td.db_user, td.db_password
+     FROM tenants t
+     JOIN tenant_databases td ON t.tenant_id = td.tenant_id
+     WHERE t.tenant_id = ? LIMIT 1`,
+    [tenantId]
+  );
+
+  if (tRows.length === 0) throw new Error(`Tenant '${tenantId}' tidak ditemukan.`);
+
+  const t = tRows[0];
+  const brandName = t.brand_name || tenantId;
+
+  const [libTemplates] = await mainPool.query(
+    'SELECT * FROM template_library ORDER BY urutan ASC, id_template ASC'
+  );
+
+  const conn = await mysql.createConnection({
+    host: t.db_host, port: t.db_port || 3306,
+    user: t.db_user, password: t.db_password, database: t.db_name,
+    connectTimeout: 6000,
+  });
+
+  let deployedCount = 0;
+  try {
+    for (const tpl of libTemplates) {
+      // Ganti placeholder {{tenant_name}} dengan brand_name tenant riil
+      const customizedBody = (tpl.body_text || '').replace(/\{\{tenant_name\}\}/g, brandName);
+
+      await conn.query(`
+        INSERT INTO wa_templates
+          (id_template, pipeline, nama_template, template_name_api, language_code,
+           body_text, kategori, urutan, status_crm, meta_status,
+           meta_buttons, parameters, header_type, header_url, created_date, last_updated)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE
+          pipeline = VALUES(pipeline),
+          nama_template = VALUES(nama_template),
+          template_name_api = VALUES(template_name_api),
+          language_code = VALUES(language_code),
+          body_text = VALUES(body_text),
+          kategori = VALUES(kategori),
+          urutan = VALUES(urutan),
+          status_crm = VALUES(status_crm),
+          meta_status = VALUES(meta_status),
+          meta_buttons = VALUES(meta_buttons),
+          parameters = VALUES(parameters),
+          header_type = VALUES(header_type),
+          header_url = VALUES(header_url),
+          last_updated = NOW()
+      `, [
+        tpl.id_template, tpl.pipeline, tpl.nama_template, tpl.template_name_api, tpl.language_code,
+        customizedBody, tpl.kategori, tpl.urutan, tpl.status_crm || 'ACTIVE', tpl.meta_status || 'APPROVED',
+        tpl.meta_buttons, tpl.parameters, tpl.header_type, tpl.header_url
+      ]);
+      deployedCount++;
+    }
+  } finally {
+    await conn.end();
+  }
+
+  return {
+    tenantId,
+    brandName,
+    deployedCount,
+    message: `Berhasil mendistribusikan ${deployedCount} template master ke tenant '${brandName}'.`
+  };
+}
+
+/**
+ * POST /api/admin/templates/library/deploy-all
+ * Menyalin 27 template default ke seluruh tenant aktif
+ */
+async function deployLibraryAll() {
+  await ensureTemplateLibrary();
+  const [tenants] = await mainPool.query(
+    `SELECT tenant_id, brand_name FROM tenants WHERE status = 'ACTIVE'`
+  );
+
+  const results = [];
+  for (const t of tenants) {
+    try {
+      const res = await deployLibraryToTenant(t.tenant_id);
+      results.push({ tenantId: t.tenant_id, brandName: t.brand_name, success: true, count: res.deployedCount });
+    } catch (err) {
+      results.push({ tenantId: t.tenant_id, brandName: t.brand_name, success: false, error: err.message });
+    }
+  }
+
+  return results;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1017,6 +1290,10 @@ module.exports = {
   updateTenantWhatsappId,
   getTemplateStats,
   getTemplatesByTenant,
+  getTemplateLibrary,
+  getTenantPreviewContext,
+  deployLibraryToTenant,
+  deployLibraryAll,
   getBillingInvoices,
   markInvoicePaid,
   getWhatsappRequests,
