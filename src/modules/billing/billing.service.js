@@ -24,7 +24,7 @@
  *  - Tenant submit bukti transfer → Admin approve di superadmin panel
  */
 
-const { pool } = require('../../../config/database');
+const { pool } = require('../../config/database');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Harga per pesan (IDR) — bisa di-override via environment variable
