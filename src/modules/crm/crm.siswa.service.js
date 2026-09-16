@@ -489,14 +489,25 @@ async function editSiswa(id, data, user) {
       }
     }
 
+    const targetSekolahId = data.id_sekolah !== undefined ? (data.id_sekolah || null) : rows[0].id_sekolah;
+    const targetChannel = data.source_channel !== undefined ? (data.source_channel || 'sekolah') : (rows[0].source_channel || 'sekolah');
+    const targetDetail = data.source_detail !== undefined ? (data.source_detail || null) : rows[0].source_detail;
+    const targetLayanan = data.kebutuhan_layanan !== undefined ? (data.kebutuhan_layanan || null) : rows[0].kebutuhan_layanan;
+    const targetAlamat = data.alamat !== undefined ? (data.alamat || null) : rows[0].alamat;
+
     await conn.query(`
       UPDATE master_siswa SET 
-        nama_lengkap = ?, wa = ?, bsuid = ?, kelas_id = ?, minat_awal = ?, rencana_lulus = ?
+        nama_lengkap = ?, wa = ?, bsuid = ?, id_sekolah = ?, source_channel = ?, source_detail = ?, kebutuhan_layanan = ?, alamat = ?, kelas_id = ?, minat_awal = ?, rencana_lulus = ?
       WHERE id_siswa = ?
     `, [
       data.nama_lengkap || rows[0].nama_lengkap,
       waClean || null,
       data.bsuid || rows[0].bsuid || null,
+      targetSekolahId,
+      targetChannel,
+      targetDetail,
+      targetLayanan,
+      targetAlamat,
       kelasId,
       data.minat_awal || rows[0].minat_awal,
       data.rencana_lulus || rows[0].rencana_lulus,

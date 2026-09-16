@@ -15,6 +15,7 @@ const authCtrl = require('./auth/auth.controller');
 const settingsCtrl = require('./crm.settings.controller');
 const whatsappSettingsCtrl = require('./whatsapp.settings.controller');
 const cohortCtrl = require('./cohort/cohort.controller');
+const billingCtrl = require('../billing/billing.controller');
 const calendarRoutes = require('./calendar/calendar.routes');
 const subscriptionRoutes = require('./subscription/subscription.routes');
 const { requireAuth } = require('../../middleware/requireAuth');
@@ -385,6 +386,15 @@ router.get('/settings/payment-verifications/search-siswa', settingsCtrl.searchSi
 router.post('/settings/payment-verifications/manual-verify', settingsCtrl.manualVerifySiswaPayment);
 router.post('/settings/payment-verifications/:token/verify', settingsCtrl.verifyPaymentRegistration);
 router.post('/settings/payment-verifications/:token/reject', settingsCtrl.rejectPaymentRegistration);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BILLING — KREDIT PESAN WA (Credit-Based Messaging)
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/billing/balance',          billingCtrl.getBalance);
+router.get('/billing/transactions',     billingCtrl.getTransactions);
+router.post('/billing/topup/request',   billingCtrl.submitTopupRequest);
+router.get('/billing/topup/requests',   billingCtrl.getTopupRequests);
+router.get('/billing/prices',           billingCtrl.getPrices);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SUBSCRIPTION & BILLING (AUTO-UPGRADE TIER VIA MIDTRANS)

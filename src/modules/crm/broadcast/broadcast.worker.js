@@ -26,8 +26,9 @@
  *    worker di instance 0 jika multi-process.
  */
 
-const { pool, mainPool } = require('../../../config/database');
+const { pool, mainPool, tenantStorage } = require('../../../config/database');
 const axios              = require('axios');
+const billingService     = require('../../billing/billing.service');
 
 // ── Konfigurasi ──────────────────────────────────────────────────────────────
 const BATCH_SIZE    = 10;   // Jumlah pesan yang diproses per run
@@ -302,6 +303,21 @@ async function processBroadcastQueue(credentials) {
            WHERE id_queue = ?`,
           [wamid, row.id_queue]
         );
+
+        // [BILLING] Post-delivery deduction — potong saldo setelah terkirim
+        // SW Open (is_sw_open = 1) → GRATIS (smart routing, tidak kena template fee)
+        // SW Closed → potong saldo marketing (default; template category belum ditrack di queue)
+        if (wamid && !row.is_sw_open) {
+          const billingTenantId = tenantStorage.getStore();
+          if (billingTenantId) {
+            billingService.deductCredit(
+              billingTenantId,
+              'marketing',  // broadcast default ke marketing; TODO: baca dari wa_templates.category
+              wamid,
+              row.wa_number
+            ).catch(e => console.warn(`[Billing][${billingTenantId}] Broadcast deduct gagal (non-fatal):`, e.message));
+          }
+        }
 
         // --- ROOMCHAT INTEGRATION ---
         // 1. Cek apakah percakapan sudah ada untuk id_siswa ini

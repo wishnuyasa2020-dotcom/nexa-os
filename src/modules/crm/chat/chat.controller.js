@@ -52,13 +52,17 @@ async function sendMessage(req, res) {
     res.json({ status: 'ok', ...result });
   } catch (err) {
     console.error('[Chat] sendMessage:', err.message);
-    // 400 untuk error bisnis (SW closed, template tidak approved, dll)
+    // Kode error spesifik dengan HTTP status yang tepat
+    if (err.code === 'CREDIT_INSUFFICIENT')    return res.status(402).json({ status: 'error', code: err.code, message: err.message });
+    if (err.code === 'WHATSAPP_NOT_CONNECTED') return res.status(403).json({ status: 'error', code: err.code, message: err.message });
+    // 400 untuk error bisnis umum (SW closed, template tidak approved, dll)
     const isBizError = err.message.includes('Service Window') ||
                        err.message.includes('Template') ||
                        err.message.includes('tidak ditemukan');
     res.status(isBizError ? 400 : 500).json({ status: 'error', message: err.message });
   }
 }
+
 
 // PATCH /api/v1/chats/:convId/read — Tandai semua pesan sudah dibaca
 async function markAsRead(req, res) {

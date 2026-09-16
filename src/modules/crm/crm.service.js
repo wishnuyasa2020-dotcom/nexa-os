@@ -998,7 +998,8 @@ async function getTaskList(category, period, user) {
       DATEDIFF(CURDATE(), sp.status_updated_date) as aging,
       IFNULL(sp.commercial_state, sp.status_terkini) as commercial_state,
       IFNULL(sp.intent, sp.prioritas) as intent,
-      IFNULL(sp.priority_score, 0) as priority_score
+      IFNULL(sp.priority_score, 0) as priority_score,
+      ms.source_channel, ms.source_detail, ms.kebutuhan_layanan
     FROM siswa_periode sp
     LEFT JOIN master_siswa ms ON sp.id_siswa = ms.id_siswa
     WHERE sp.marketing_period = ? AND sp.next_action != 'Tidak Ada' AND sp.next_action != '' ${dateFilterSqlDue}
@@ -1016,9 +1017,11 @@ async function getTaskList(category, period, user) {
       DATE_FORMAT(hv.due_date, '%d/%m/%Y') as dueDate,
       DATE_FORMAT(hv.due_date, '%Y-%m-%d') as dueDateISO,
       DATEDIFF(hv.due_date, CURDATE()) as dueDiff,
-      sp.cro, sp.prioritas
+      sp.cro, sp.prioritas,
+      ms.source_channel, ms.source_detail, ms.kebutuhan_layanan
     FROM home_visit hv
     LEFT JOIN siswa_periode sp ON hv.id_siswa_nama LIKE CONCAT(sp.id_siswa, '%') AND sp.marketing_period = hv.marketing_period
+    LEFT JOIN master_siswa ms ON sp.id_siswa = ms.id_siswa
     WHERE hv.marketing_period = ? AND hv.next_action != 'Tidak Ada' AND hv.next_action != '' ${dateFilterSqlHV}
   `;
   if (!isAdmin) {
@@ -1087,7 +1090,10 @@ async function getTaskList(category, period, user) {
       dueCategory: getDueCategory(row.dueDiff),
       prioritas: String(row.prioritas || ''),
       cro: String(row.cro || ''),
-      aging: row.aging ? parseInt(row.aging) : 0
+      aging: row.aging ? parseInt(row.aging) : 0,
+      sourceChannel: String(row.source_channel || 'sekolah'),
+      sourceDetail: row.source_detail ? String(row.source_detail) : null,
+      kebutuhanLayanan: row.kebutuhan_layanan ? String(row.kebutuhan_layanan) : null
     });
   });
 
@@ -1108,7 +1114,10 @@ async function getTaskList(category, period, user) {
       dueCategory: getDueCategory(row.dueDiff),
       prioritas: String(row.prioritas || ''),
       cro: String(row.cro || ''),
-      aging: 0
+      aging: 0,
+      sourceChannel: String(row.source_channel || 'sekolah'),
+      sourceDetail: row.source_detail ? String(row.source_detail) : null,
+      kebutuhanLayanan: row.kebutuhan_layanan ? String(row.kebutuhan_layanan) : null
     });
   });
 

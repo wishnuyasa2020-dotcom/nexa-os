@@ -2,6 +2,7 @@
 
 const { Router } = require('express');
 const ctrl = require('./admin.controller');
+const billingAdminCtrl = require('./billing.admin.controller');
 
 const router = Router();
 
@@ -44,6 +45,15 @@ router.get('/templates/:tenantId',                          ctrl.templatesByTena
 router.get('/billing/invoices',                      ctrl.billingInvoices);
 router.post('/billing/invoices/:invoiceId/mark-paid', ctrl.markInvoicePaid);
 
+// ── Credit Messaging Billing (Superadmin) ──────────────────────
+// PENTING: route spesifik (/credits/topup-requests) harus SEBELUM /credits/:tenantId
+router.get('/credits',                                              billingAdminCtrl.getAllTenantsCredit);
+router.get('/credits/topup-requests',                              billingAdminCtrl.getAllTopupRequests);
+router.post('/credits/topup-requests/:tenantId/:requestId/approve', billingAdminCtrl.approveTopupRequest);
+router.post('/credits/topup-requests/:tenantId/:requestId/reject',  billingAdminCtrl.rejectTopupRequest);
+router.post('/credits/:tenantId/adjustment',                        billingAdminCtrl.manualAdjustment);
+router.get('/credits/:tenantId/transactions',                       billingAdminCtrl.getTenantTransactions);
+
 // ── DB Pool Management (SaaS Engine) ─────────────────────────
 const saasCtrl = require('../saas/saas.controller');
 router.get('/db-pool',        saasCtrl.getPoolOverview);
@@ -60,4 +70,3 @@ router.get('/demo/status', ctrl.getDemoStatus);
 router.post('/demo/reset', ctrl.resetDemo);
 
 module.exports = router;
-

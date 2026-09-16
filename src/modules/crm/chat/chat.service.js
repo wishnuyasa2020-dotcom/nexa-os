@@ -18,6 +18,7 @@
  */
 
 const { pool, mainPool, tenantStorage } = require('../../../config/database');
+const billingService = require('../../billing/billing.service');
 
 const axios    = require('axios');
 const FormData = require('form-data');
@@ -346,6 +347,31 @@ async function sendMessage(convId, payload, user) {
       throw err;
     }
 
+    // 2.6 Gating: Cek saldo kredit tenant (billing pre-check)
+    //     Service message (SW Open + teks bebas) → selalu gratis, skip check
+    //     Template Meta (SW Closed) → harus ada saldo di atas threshold
+    const tenantId = tenantStorage ? tenantStorage.getStore() : null;
+    let billingMsgType = 'service'; // default gratis
+    if (templateId) {
+      billingMsgType = billingService.resolveMessageType({
+        isSwOpen,
+        sentAsTemplate: !isSwOpen, // akan jadi true setelah routing ditetapkan
+        templateCategory: null,    // belum ada info kategori di sini; default marketing
+      });
+    }
+    if (tenantId && billingMsgType !== 'service') {
+      const creditCheck = await billingService.checkBalance(tenantId, 'marketing');
+      if (!creditCheck.allowed) {
+        const err = new Error(
+          `Saldo kredit NexaMOS tidak mencukupi (sisa Rp ${(creditCheck.balance || 0).toLocaleString('id-ID')}). ` +
+          `Silakan top-up kredit terlebih dahulu di menu Pengaturan > Kredit Pesan.`
+        );
+        err.code = 'CREDIT_INSUFFICIENT';
+        err.statusCode = 402;
+        throw err;
+      }
+    }
+
     // 3. SMART ROUTING
     if (templateId) {
       const [[tmpl]] = await conn.query(
@@ -450,8 +476,6 @@ async function sendMessage(convId, payload, user) {
     }
 
     // 8. [PRD LIVE CHAT §5 — Event-Sourcing CQRS] Rekam event 'MessageSent'
-    //    Hal ini memungkinkan Rule Engine (misal: Snooze auto-wakeup) bereaksi
-    //    terhadap aktivitas percakapan tanpa polling tabel chat_messages.
     if (waMessageId) {
       const eventId = `EVT-CHAT-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
       const eventPayload = JSON.stringify({
@@ -466,6 +490,19 @@ async function sendMessage(convId, payload, user) {
          VALUES (?, 'conversation', ?, 'MessageSent', ?, ?, NOW())`,
         [eventId, String(convId), eventPayload, user.nama || 'system']
       ).catch(e => console.warn('[Chat] events_log MessageSent insert failed (non-fatal):', e.message));
+    }
+
+    // 9. [BILLING] Post-delivery deduction — potong saldo SETELAH pesan berhasil dikirim
+    //    Hanya template Meta berbayar yang dikenakan biaya.
+    //    Free text (SW Open) dan service message → GRATIS, tidak dipotong.
+    if (waMessageId && tenantId && sentAsTemplate) {
+      const finalBillingType = billingService.resolveMessageType({
+        isSwOpen:         false, // jika sentAsTemplate = true, pasti SW Closed
+        sentAsTemplate:   true,
+        templateCategory: templatePayload?.category || null,
+      });
+      billingService.deductCredit(tenantId, finalBillingType, waMessageId, phone)
+        .catch(e => console.warn('[Billing] Deduct gagal (non-fatal):', e.message));
     }
 
     await conn.commit();
