@@ -39,9 +39,10 @@ async function getAllSiswa(req, res) {
 
 async function getDashboardSummary(req, res) {
   try {
-    const period = req.body.args ? req.body.args[0] : req.body.marketingPeriod;
-    const mf = req.body.args ? req.body.args[1] : req.body.monthFilter;
-    const data = await crmService.getDashboardSummary(req.user, period, mf);
+    const period = req.body.args ? req.body.args[0] : (req.body.marketingPeriod || req.query.period);
+    const mf = req.body.args ? req.body.args[1] : (req.body.monthFilter || req.query.monthFilter || 'All');
+    const channel = req.body.args ? req.body.args[2] : (req.body.channel || req.query.channel || 'All');
+    const data = await crmService.getDashboardSummary(req.user, period, mf, channel);
     res.json({ status: 'ok', data });
   } catch (err) {
     console.error('getDashboardSummary Error:', err);
@@ -62,9 +63,10 @@ async function getDashboardTasks(req, res) {
 
 async function getDashboardFunnels(req, res) {
   try {
-    const period = req.body.args ? req.body.args[0] : req.body.marketingPeriod;
-    const mf = req.body.args ? req.body.args[1] : req.body.monthFilter;
-    const data = await crmService.getDashboardFunnels(req.user, period, mf);
+    const period = req.body.args ? req.body.args[0] : (req.body.marketingPeriod || req.query.period);
+    const mf = req.body.args ? req.body.args[1] : (req.body.monthFilter || req.query.monthFilter || 'All');
+    const channel = req.body.args ? req.body.args[2] : (req.body.channel || req.query.channel || 'All');
+    const data = await crmService.getDashboardFunnels(req.user, period, mf, channel);
     res.json({ status: 'ok', data });
   } catch (err) {
     console.error('getDashboardFunnels Error:', err);
@@ -462,9 +464,10 @@ async function addAktivitasSekolah(req, res) {
  */
 async function getDashboardStats(req, res) {
   try {
-    const period = req.query.period || null;
-    const month  = req.query.month  || 'All';
-    const data   = await crmService.getDashboardSummary(req.user, period, month);
+    const period  = req.query.period  || null;
+    const month   = req.query.month   || 'All';
+    const channel = req.query.channel || 'All';
+    const data    = await crmService.getDashboardSummary(req.user, period, month, channel);
     res.json({ status: 'ok', data });
   } catch (err) {
     console.error('getDashboardStats Error:', err);
@@ -474,13 +477,14 @@ async function getDashboardStats(req, res) {
 
 /**
  * GET /api/v1/dashboard/charts
- * Query: ?period=2025/2026&month=All
+ * Query: ?period=2025/2026&month=All&channel=All
  */
 async function getDashboardCharts(req, res) {
   try {
-    const period = req.query.period || null;
-    const month  = req.query.month  || 'All';
-    const data   = await crmService.getDashboardFunnels(req.user, period, month);
+    const period  = req.query.period  || null;
+    const month   = req.query.month   || 'All';
+    const channel = req.query.channel || 'All';
+    const data    = await crmService.getDashboardFunnels(req.user, period, month, channel);
     res.json({ status: 'ok', data });
   } catch (err) {
     console.error('getDashboardCharts Error:', err);

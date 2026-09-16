@@ -163,8 +163,15 @@ router.post('/:tenantSlug/register', rateLimiter, async (req, res) => {
       nama_ortu,
       wa_ortu,
       tgl_lahir_ortu,
-      pekerjaan_ortu
+      pekerjaan_ortu,
+      source_channel,
+      source_detail,
+      kebutuhan_layanan
     } = req.body;
+
+    const channel = (source_channel || req.query.source || 'sekolah').toLowerCase();
+    const detail = source_detail || req.query.campaign || req.query.ref || null;
+    const layanan = kebutuhan_layanan || nama_program || null;
 
     // 1. Validasi Wajib Nama & WhatsApp
     if (!nama_lengkap || !nama_lengkap.trim()) {
@@ -246,13 +253,16 @@ router.post('/:tenantSlug/register', rateLimiter, async (req, res) => {
         // 1. Insert master_siswa (dengan opt_in_wa = 'Ya' dan alamat jika ada)
         await conn.query(`
           INSERT INTO master_siswa 
-            (id_siswa, id_sekolah, nama_lengkap, wa, kelas_id, minat_awal, rencana_lulus, alamat, opt_in_wa, created_date)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Ya', NOW())
+            (id_siswa, id_sekolah, nama_lengkap, wa, source_channel, source_detail, kebutuhan_layanan, kelas_id, minat_awal, rencana_lulus, alamat, opt_in_wa, created_date)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Ya', NOW())
         `, [
           idSiswa,
           targetSekolahId || null,
           nama_lengkap.trim(),
           waClean,
+          channel,
+          detail,
+          layanan,
           kelasId,
           minat,
           rencana,

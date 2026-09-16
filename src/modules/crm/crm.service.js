@@ -312,10 +312,11 @@ function getMonthYearForPeriod(monthName, periodName) {
   return monthsMap[monthName] || null;
 }
 
-async function getDashboardSummary(user, marketingPeriodArg, monthFilter = 'All') {
+async function getDashboardSummary(user, marketingPeriodArg, monthFilter = 'All', channelFilter = 'All') {
   let mp = marketingPeriodArg || user.selectedPeriod;
   if (!mp || mp === '-') mp = await getActiveMarketingPeriod();
   const mf = monthFilter;
+  const cf = channelFilter || 'All';
   const isAdmin = user.role === 'Admin' || user.role === 'Manager';
   
   const filterParts = (mf !== 'All') ? getMonthYearForPeriod(mf, mp) : null;
@@ -345,16 +346,50 @@ async function getDashboardSummary(user, marketingPeriodArg, monthFilter = 'All'
   });
   const sekolahTersosialisasi = funnelSekolahMap['Sudah Sosialisasi'] || 0;
 
+  // Aggregasi 7 Intake Channels
+  const qChannel = `
+    SELECT 
+      COALESCE(ms.source_channel, 'sekolah') AS channel,
+      COUNT(*) AS cnt
+    FROM siswa_periode sp
+    JOIN master_siswa ms ON sp.id_siswa = ms.id_siswa
+    WHERE sp.marketing_period = ?${croSiswa}${monthSiswaClause}
+    GROUP BY COALESCE(ms.source_channel, 'sekolah')
+  `;
+  const [channelRows] = await pool.query(qChannel, paramsSiswa);
+  const channelBreakdown = {
+    sekolah: 0,
+    relasi: 0,
+    instagram: 0,
+    facebook: 0,
+    tiktok: 0,
+    website: 0,
+    whatsapp: 0
+  };
+  channelRows.forEach(r => {
+    const ch = (r.channel || 'sekolah').toLowerCase();
+    channelBreakdown[ch] = (channelBreakdown[ch] || 0) + parseInt(r.cnt, 10);
+  });
+
+  // Filter channel opsional pada metrik siswa
+  let channelClause = '';
+  const paramsSiswaFiltered = [...paramsSiswa];
+  if (cf && cf !== 'All' && cf !== 'all' && cf !== 'Semua') {
+    channelClause = ' AND COALESCE(ms.source_channel, "sekolah") = ?';
+    paramsSiswaFiltered.push(cf.toLowerCase());
+  }
+
   const q2 = `
     SELECT 
       sp.status_terkini,
       sp.commercial_state,
       COUNT(*) AS cnt 
     FROM siswa_periode sp 
-    WHERE marketing_period = ?${croSiswa}${monthSiswaClause} 
+    JOIN master_siswa ms ON sp.id_siswa = ms.id_siswa
+    WHERE sp.marketing_period = ?${croSiswa}${monthSiswaClause}${channelClause} 
     GROUP BY sp.status_terkini, sp.commercial_state
   `;
-  const [siswaRows] = await pool.query(q2, paramsSiswa);
+  const [siswaRows] = await pool.query(q2, paramsSiswaFiltered);
 
   let totalSiswa = 0;
   let terdaftar = 0;
@@ -411,6 +446,7 @@ async function getDashboardSummary(user, marketingPeriodArg, monthFilter = 'All'
           siapDaftar, pctSiapDaftar: konsultasi > 0 ? Math.round((siapDaftar / konsultasi) * 100) : 0,
           terdaftar, pctTerdaftar: siapDaftar > 0 ? Math.round((terdaftar / siapDaftar) * 100) : 0
         },
+        channelBreakdown,
         quota
       };
     }
@@ -455,6 +491,7 @@ async function getDashboardSummary(user, marketingPeriodArg, monthFilter = 'All'
       siapDaftar, pctSiapDaftar: konsultasi > 0 ? Math.round((siapDaftar / konsultasi) * 100) : 0,
       terdaftar, pctTerdaftar: siapDaftar > 0 ? Math.round((terdaftar / siapDaftar) * 100) : 0
     },
+    channelBreakdown,
     quota
   };
 }
@@ -529,10 +566,11 @@ async function getDashboardTasks(user, marketingPeriod) {
   return { taskSummary: taskCounts, tasks: tasksResult };
 }
 
-async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All') {
+async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All', channelFilter = 'All') {
   let mp = marketingPeriodArg || user.selectedPeriod;
   if (!mp || mp === '-') mp = await getActiveMarketingPeriod();
   const mf = monthFilter;
+  const cf = channelFilter || 'All';
   const isAdmin = user.role === 'Admin' || user.role === 'Manager';
   
   const filterParts = (mf !== 'All') ? getMonthYearForPeriod(mf, mp) : null;
@@ -560,6 +598,39 @@ async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All'
   const { STATUS_SEKOLAH, STATUS_SISWA } = require('./crm.constants');
   
   const funnelSekolah = STATUS_SEKOLAH.map(s => ({ status: s, count: funnelSekolahMap[s] || 0 }));
+
+  // Aggregasi 7 Intake Channels
+  const qChannel = `
+    SELECT 
+      COALESCE(ms.source_channel, 'sekolah') AS channel,
+      COUNT(*) AS cnt
+    FROM siswa_periode sp
+    JOIN master_siswa ms ON sp.id_siswa = ms.id_siswa
+    WHERE sp.marketing_period = ?${croSiswa}${monthSiswaClause}
+    GROUP BY COALESCE(ms.source_channel, 'sekolah')
+  `;
+  const [channelRows] = await pool.query(qChannel, paramsSiswa);
+  const channelBreakdown = {
+    sekolah: 0,
+    relasi: 0,
+    instagram: 0,
+    facebook: 0,
+    tiktok: 0,
+    website: 0,
+    whatsapp: 0
+  };
+  channelRows.forEach(r => {
+    const ch = (r.channel || 'sekolah').toLowerCase();
+    channelBreakdown[ch] = (channelBreakdown[ch] || 0) + parseInt(r.cnt, 10);
+  });
+
+  // Filter channel opsional pada funnel pipeline siswa
+  let channelClause = '';
+  const paramsSiswaFiltered = [...paramsSiswa];
+  if (cf && cf !== 'All' && cf !== 'all' && cf !== 'Semua') {
+    channelClause = ' AND COALESCE(ms.source_channel, "sekolah") = ?';
+    paramsSiswaFiltered.push(cf.toLowerCase());
+  }
 
   // B2C Funnel Pipeline (5 Tahap Universal Ontologi: Known Profile ➔ Lead ➔ Prospect ➔ Opportunity ➔ Customer)
   const q2 = `
@@ -591,12 +662,13 @@ async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All'
       END AS pipeline_stage,
       COUNT(*) AS cnt
     FROM siswa_periode sp
-    WHERE marketing_period = ?${croSiswa}${monthSiswaClause}
+    JOIN master_siswa ms ON sp.id_siswa = ms.id_siswa
+    WHERE sp.marketing_period = ?${croSiswa}${monthSiswaClause}${channelClause}
       AND (sp.commercial_state != 'Disqualified' OR sp.commercial_state IS NULL)
       AND (sp.status_terkini != 'Tidak Lanjut' OR sp.status_terkini IS NULL)
     GROUP BY pipeline_stage
   `;
-  const [siswaRows] = await pool.query(q2, paramsSiswa);
+  const [siswaRows] = await pool.query(q2, paramsSiswaFiltered);
   
   const funnelSiswaMap = {};
   siswaRows.forEach(r => funnelSiswaMap[r.pipeline_stage] = parseInt(r.cnt, 10));
@@ -607,7 +679,7 @@ async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All'
     count: funnelSiswaMap[stage] || 0
   }));
 
-  return { funnelSekolah, funnelSiswa };
+  return { funnelSekolah, funnelSiswa, channelBreakdown };
 }
 
 async function getDashboardAktivitas(user, marketingPeriod, monthFilter = 'All') {

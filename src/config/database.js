@@ -88,88 +88,109 @@ async function testConnection() {
           password: config.db_password,
           database: config.db_name
         });
+        // 1. Auto-Migrate: chat_messages.reaction
         try {
-          // Attempt to add column, ignore if exists
-          await tPool.query('ALTER TABLE chat_messages ADD COLUMN reaction VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;');
-          console.log(`✅ Auto-Migrate: Added reaction column to ${config.db_name}`);
-          // Auto-Migrate: sekolah_periode.pipeline_state
-          try {
-            const [spCols] = await tPool.query("SHOW COLUMNS FROM sekolah_periode LIKE 'pipeline_state'");
-            if (spCols.length === 0) {
-              await tPool.query("ALTER TABLE sekolah_periode ADD COLUMN pipeline_state VARCHAR(50) NULL DEFAULT 'Identified' AFTER status_terkini;");
-              try { await tPool.query("ALTER TABLE sekolah_periode ADD INDEX idx_sp_pipeline_state (pipeline_state);"); } catch(eIdx) {}
-              await tPool.query(`
-                UPDATE sekolah_periode
-                SET pipeline_state = CASE
-                  WHEN status_terkini IN ('Belum Visit', 'Tunggu Visit Ulang') THEN 'Identified'
-                  WHEN status_terkini IN ('Tunggu Keputusan', 'Tunggu Jadwal Sosialisasi', 'Diminta Meeting') THEN 'Engaged'
-                  WHEN status_terkini = 'Sosialisasi Terjadwal' THEN 'Sosialisasi Terjadwal'
-                  WHEN status_terkini = 'Sudah Sosialisasi' THEN 'Sudah Sosialisasi'
-                  WHEN status_terkini IN ('Identity Captured', 'Data Siswa Terinput') THEN 'Identity Captured'
-                  WHEN status_terkini IN ('Tidak Bisa Sosialisasi', 'Nonaktif / Tutup / Merger', 'Ditolak Final') THEN 'Disqualified'
-                  ELSE IFNULL(pipeline_state, 'Identified')
-                END
-                WHERE pipeline_state IS NULL OR pipeline_state = '' OR pipeline_state = 'Identified';
-              `);
-              console.log(`✅ Auto-Migrate: Added pipeline_state to ${config.db_name}`);
-            }
-          } catch (eSp) {
-            // Abaikan jika tabel tidak ada
+          const [rcCols] = await tPool.query("SHOW COLUMNS FROM chat_messages LIKE 'reaction'");
+          if (rcCols.length === 0) {
+            await tPool.query('ALTER TABLE chat_messages ADD COLUMN reaction VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;');
+            console.log(`✅ Auto-Migrate: Added reaction column to ${config.db_name}`);
           }
+        } catch (eRc) {
+          // Non-fatal
+        }
 
-          // Auto-Sync: student_current_state (Read-Model Projection)
-          try {
+        // 2. Auto-Migrate: sekolah_periode.pipeline_state
+        try {
+          const [spCols] = await tPool.query("SHOW COLUMNS FROM sekolah_periode LIKE 'pipeline_state'");
+          if (spCols.length === 0) {
+            await tPool.query("ALTER TABLE sekolah_periode ADD COLUMN pipeline_state VARCHAR(50) NULL DEFAULT 'Identified' AFTER status_terkini;");
+            try { await tPool.query("ALTER TABLE sekolah_periode ADD INDEX idx_sp_pipeline_state (pipeline_state);"); } catch(eIdx) {}
             await tPool.query(`
-              CREATE TABLE IF NOT EXISTS student_current_state (
-                id_siswa         VARCHAR(50)  NOT NULL,
-                nama_siswa       VARCHAR(150) NULL,
-                cro_assignee     VARCHAR(100) NULL,
-                pipeline_state   VARCHAR(50)  NULL,
-                status_label     VARCHAR(50)  NULL,
-                marketing_period VARCHAR(20)  NULL,
-                updated_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                PRIMARY KEY (id_siswa),
-                INDEX idx_cro_assignee  (cro_assignee),
-                INDEX idx_pipeline_state (pipeline_state)
-              ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+              UPDATE sekolah_periode
+              SET pipeline_state = CASE
+                WHEN status_terkini IN ('Belum Visit', 'Tunggu Visit Ulang') THEN 'Identified'
+                WHEN status_terkini IN ('Tunggu Keputusan', 'Tunggu Jadwal Sosialisasi', 'Diminta Meeting') THEN 'Engaged'
+                WHEN status_terkini = 'Sosialisasi Terjadwal' THEN 'Sosialisasi Terjadwal'
+                WHEN status_terkini = 'Sudah Sosialisasi' THEN 'Sudah Sosialisasi'
+                WHEN status_terkini IN ('Identity Captured', 'Data Siswa Terinput') THEN 'Identity Captured'
+                WHEN status_terkini IN ('Tidak Bisa Sosialisasi', 'Nonaktif / Tutup / Merger', 'Ditolak Final') THEN 'Disqualified'
+                ELSE IFNULL(pipeline_state, 'Identified')
+              END
+              WHERE pipeline_state IS NULL OR pipeline_state = '' OR pipeline_state = 'Identified';
             `);
-            await tPool.query(`
-              INSERT INTO student_current_state
-                (id_siswa, nama_siswa, cro_assignee, pipeline_state, status_label, marketing_period, updated_at)
-              SELECT
-                sp.id_siswa,
-                ms.nama_lengkap,
-                sp.cro,
-                COALESCE(sp.commercial_state, 'Lead'),
-                sp.status_terkini,
-                sp.marketing_period,
-                COALESCE(sp.last_updated, sp.created_date, NOW())
-              FROM siswa_periode sp
-              JOIN master_siswa ms ON ms.id_siswa = sp.id_siswa
-              WHERE sp.id_record = (
-                SELECT sp2.id_record FROM siswa_periode sp2
-                WHERE sp2.id_siswa = sp.id_siswa
-                ORDER BY COALESCE(sp2.last_updated, sp2.created_date) DESC, sp2.id_record DESC
-                LIMIT 1
-              )
-              ON DUPLICATE KEY UPDATE
-                nama_siswa       = VALUES(nama_siswa),
-                cro_assignee     = VALUES(cro_assignee),
-                pipeline_state   = VALUES(pipeline_state),
-                status_label     = VALUES(status_label),
-                marketing_period = VALUES(marketing_period),
-                updated_at       = VALUES(updated_at);
-            `);
-            console.log(`✅ Auto-Sync: student_current_state synchronized for ${config.db_name}`);
-          } catch (eScs) {
-            // Non-fatal
+            console.log(`✅ Auto-Migrate: Added pipeline_state to ${config.db_name}`);
           }
-        } catch (e) {
-          if (e.code === 'ER_DUP_FIELDNAME') {
-             try {
-                await tPool.query('ALTER TABLE chat_messages MODIFY reaction VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;');
-             } catch(e2) {}
+        } catch (eSp) {
+          // Non-fatal
+        }
+
+        // 3. Auto-Sync: student_current_state (Read-Model Projection)
+        try {
+          await tPool.query(`
+            CREATE TABLE IF NOT EXISTS student_current_state (
+              id_siswa         VARCHAR(50)  NOT NULL,
+              nama_siswa       VARCHAR(150) NULL,
+              cro_assignee     VARCHAR(100) NULL,
+              pipeline_state   VARCHAR(50)  NULL,
+              status_label     VARCHAR(50)  NULL,
+              marketing_period VARCHAR(20)  NULL,
+              updated_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              PRIMARY KEY (id_siswa),
+              INDEX idx_cro_assignee  (cro_assignee),
+              INDEX idx_pipeline_state (pipeline_state)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+          `);
+          await tPool.query(`
+            INSERT INTO student_current_state
+              (id_siswa, nama_siswa, cro_assignee, pipeline_state, status_label, marketing_period, updated_at)
+            SELECT
+              sp.id_siswa,
+              ms.nama_lengkap,
+              sp.cro,
+              COALESCE(sp.commercial_state, 'Lead'),
+              sp.status_terkini,
+              sp.marketing_period,
+              COALESCE(sp.last_updated, sp.created_date, NOW())
+            FROM siswa_periode sp
+            JOIN master_siswa ms ON ms.id_siswa = sp.id_siswa
+            WHERE sp.id_record = (
+              SELECT sp2.id_record FROM siswa_periode sp2
+              WHERE sp2.id_siswa = sp.id_siswa
+              ORDER BY COALESCE(sp2.last_updated, sp2.created_date) DESC, sp2.id_record DESC
+              LIMIT 1
+            )
+            ON DUPLICATE KEY UPDATE
+              nama_siswa       = VALUES(nama_siswa),
+              cro_assignee     = VALUES(cro_assignee),
+              pipeline_state   = VALUES(pipeline_state),
+              status_label     = VALUES(status_label),
+              marketing_period = VALUES(marketing_period),
+              updated_at       = VALUES(updated_at);
+          `);
+        } catch (eScs) {
+          // Non-fatal
+        }
+
+        // 4. Auto-Migrate: master_siswa multi-channel columns (source_channel, source_detail, kebutuhan_layanan)
+        try {
+          const [msCols] = await tPool.query("SHOW COLUMNS FROM master_siswa LIKE 'source_channel'");
+          if (msCols.length === 0) {
+            await tPool.query("ALTER TABLE master_siswa ADD COLUMN source_channel VARCHAR(50) NOT NULL DEFAULT 'sekolah' AFTER wa;");
+            try { await tPool.query("ALTER TABLE master_siswa ADD INDEX idx_ms_source_channel (source_channel);"); } catch(eIdx) {}
+            console.log(`✅ Auto-Migrate: Added source_channel to master_siswa in ${config.db_name}`);
           }
+          const [sdCols] = await tPool.query("SHOW COLUMNS FROM master_siswa LIKE 'source_detail'");
+          if (sdCols.length === 0) {
+            await tPool.query("ALTER TABLE master_siswa ADD COLUMN source_detail VARCHAR(100) NULL AFTER source_channel;");
+            console.log(`✅ Auto-Migrate: Added source_detail to master_siswa in ${config.db_name}`);
+          }
+          const [klCols] = await tPool.query("SHOW COLUMNS FROM master_siswa LIKE 'kebutuhan_layanan'");
+          if (klCols.length === 0) {
+            await tPool.query("ALTER TABLE master_siswa ADD COLUMN kebutuhan_layanan VARCHAR(150) NULL AFTER source_detail;");
+            console.log(`✅ Auto-Migrate: Added kebutuhan_layanan to master_siswa in ${config.db_name}`);
+          }
+        } catch (eMs) {
+          console.warn(`[Auto-Migrate] master_siswa multi-channel error in ${config.db_name}:`, eMs.message);
         }
       }
     } catch(err) {

@@ -129,6 +129,10 @@ async function listSiswa(user, query = {}) {
   if (query.intent)          { whereParts.push('sp.intent = ?');            params.push(query.intent); }
   if (query.kelas)           { whereParts.push('mk.nama_kelas = ?');        params.push(query.kelas); }
   if (query.prioritas)       { whereParts.push('sp.prioritas = ?');         params.push(query.prioritas); }
+  if (query.channel && query.channel !== 'all' && query.channel !== 'Semua') {
+    whereParts.push('COALESCE(ms.source_channel, "sekolah") = ?');
+    params.push(query.channel.toLowerCase());
+  }
   
   if (query.search) {
     const s = `%${query.search}%`;
@@ -157,6 +161,9 @@ async function listSiswa(user, query = {}) {
       IFNULL(ms.nama_lengkap, '') as nama,
       IFNULL(sek.nama_sekolah, '') as namaSekolah,
       IFNULL(mk.nama_kelas, '') as kelas,
+      COALESCE(ms.source_channel, 'sekolah') as sourceChannel,
+      IFNULL(ms.source_detail, '') as sourceDetail,
+      IFNULL(ms.kebutuhan_layanan, '') as kebutuhanLayanan,
       IFNULL(sp.cro, '') as cro,
       IFNULL(sp.status_terkini, '') as status,
       IFNULL(sp.commercial_state, 'Lead') as commercialState,
@@ -215,7 +222,8 @@ async function detailSiswa(id, user, query = {}) {
   const [rows] = await pool.query(`
     SELECT
       ms.id_siswa, ms.id_sekolah, sek.nama_sekolah as nama_sekolah, ms.nama_lengkap, 
-      ms.wa, ms.bsuid, mk.nama_kelas as kelas, ms.minat_awal, ms.rencana_lulus, sp.prioritas,
+      ms.wa, ms.bsuid, COALESCE(ms.source_channel, 'sekolah') as source_channel, ms.source_detail, ms.kebutuhan_layanan,
+      mk.nama_kelas as kelas, ms.minat_awal, ms.rencana_lulus, sp.prioritas,
       sp.status_terkini,
       IFNULL(sp.commercial_state, 'Lead') as commercial_state,
       IFNULL(sp.intent, 'Mid') as intent,
@@ -265,9 +273,14 @@ async function tambahSiswa(data, user) {
   let mp = data.period || user.selectedPeriod;
   if (!mp || mp === '-') mp = await getActivePeriod();
 
-  // Validate required
-  if (!data.nama_lengkap || (!data.no_wa && !data.bsuid) || !data.id_sekolah || !data.minat_awal || !data.rencana_lulus) {
-    throw new Error('Data tidak lengkap (nama, kontak (wa/bsuid), sekolah, minat, rencana lulus wajib).');
+  const sourceChannel = (data.source_channel || data.sourceChannel || 'sekolah').toLowerCase();
+  const sourceDetail = data.source_detail || data.sourceDetail || null;
+  const kebutuhanLayanan = data.kebutuhan_layanan || data.kebutuhanLayanan || null;
+
+  // Validate required (id_sekolah hanya wajib jika jalur sekolah)
+  const isSchoolRequired = sourceChannel === 'sekolah';
+  if (!data.nama_lengkap || (!data.no_wa && !data.bsuid) || (isSchoolRequired && !data.id_sekolah) || !data.minat_awal || !data.rencana_lulus) {
+    throw new Error('Data tidak lengkap (nama, kontak (wa/bsuid), minat, dan rencana lulus wajib diisi. Pilihan sekolah wajib untuk jalur Kunjungan Sekolah).');
   }
 
   // ── Validasi Kuota Ingestion ──
@@ -303,7 +316,7 @@ async function tambahSiswa(data, user) {
     }
 
     // ── Konsep Utama 1 Kelas 1 CRO: Auto-inherit jika kelas sudah di-assign Chief CRO ──
-    if (!pjCro && (kelasId || namaKelas)) {
+    if (!pjCro && (kelasId || namaKelas) && data.id_sekolah) {
       const [existingClassCro] = await conn.query(`
         SELECT sp.cro 
         FROM siswa_periode sp
@@ -317,7 +330,7 @@ async function tambahSiswa(data, user) {
     }
 
     // ── Validasi: 1 Kelas 1 CRO (di sekolah & periode yang sama) ──
-    if ((kelasId || namaKelas) && pjCro) {
+    if ((kelasId || namaKelas) && pjCro && data.id_sekolah) {
       const [existingCroRow] = await conn.query(`
         SELECT sp.cro 
         FROM siswa_periode sp
@@ -354,9 +367,9 @@ async function tambahSiswa(data, user) {
     // Insert master_siswa
     await conn.query(`
       INSERT INTO master_siswa 
-      (id_siswa, id_sekolah, nama_lengkap, wa, bsuid, kelas, kelas_id, minat_awal, rencana_lulus, opt_in_wa)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [idSiswa, data.id_sekolah, data.nama_lengkap, waClean || null, data.bsuid || null, namaKelas, kelasId || null, data.minat_awal, data.rencana_lulus, optInWa]);
+      (id_siswa, id_sekolah, nama_lengkap, wa, bsuid, source_channel, source_detail, kebutuhan_layanan, kelas, kelas_id, minat_awal, rencana_lulus, opt_in_wa)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [idSiswa, data.id_sekolah || null, data.nama_lengkap, waClean || null, data.bsuid || null, sourceChannel, sourceDetail, kebutuhanLayanan, namaKelas, kelasId || null, data.minat_awal, data.rencana_lulus, optInWa]);
 
     // Insert siswa_periode (default Data Masuk, commercial_state Known)
     const idRecord = `SWP-${Date.now().toString().slice(-6)}-${Math.floor(Math.random()*1000)}`;
@@ -381,7 +394,10 @@ async function tambahSiswa(data, user) {
         id_siswa: idSiswa,
         nama_lengkap: data.nama_lengkap,
         wa: waClean || null,
-        id_sekolah: data.id_sekolah,
+        id_sekolah: data.id_sekolah || null,
+        source_channel: sourceChannel,
+        source_detail: sourceDetail,
+        kebutuhan_layanan: kebutuhanLayanan,
         opt_in_wa: optInWa,
         added_by: user.nama || 'CRO'
       }),
@@ -734,11 +750,14 @@ async function importBatch(dataBatch, croName, user) {
       // Consent Engine: cek apakah kolom consent_wa ada
       const isConsent = row.consent_wa === true || row.consent_wa === 'true' || row.consent_wa === 'Ya' || row.opt_in_wa === 'Ya';
       const optIn = isConsent ? 'Ya' : 'Belum';
+      const rowChannel = (row.source_channel || row.sourceChannel || row.channel || 'sekolah').toLowerCase();
+      const rowDetail = row.source_detail || row.sourceDetail || row.detail || null;
+      const rowLayanan = row.kebutuhan_layanan || row.kebutuhanLayanan || row.layanan || null;
 
       await conn.query(`
-        INSERT INTO master_siswa (id_siswa, id_sekolah, nama_lengkap, wa, bsuid, kelas_id, minat_awal, rencana_lulus, opt_in_wa)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [idSiswa, row.id_sekolah, row.nama_lengkap, waClean || null, row.bsuid || null, kelasId || null, row.minat_awal || 'Ragu', row.rencana_lulus || 'Belum Tahu', optIn]);
+        INSERT INTO master_siswa (id_siswa, id_sekolah, nama_lengkap, wa, bsuid, source_channel, source_detail, kebutuhan_layanan, kelas_id, minat_awal, rencana_lulus, opt_in_wa)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [idSiswa, row.id_sekolah || null, row.nama_lengkap, waClean || null, row.bsuid || null, rowChannel, rowDetail, rowLayanan, kelasId || null, row.minat_awal || 'Ragu', row.rencana_lulus || 'Belum Tahu', optIn]);
 
       const idRecord = `SWP-${Date.now().toString().slice(-6)}-${Math.floor(Math.random()*1000)}`;
       await conn.query(`
