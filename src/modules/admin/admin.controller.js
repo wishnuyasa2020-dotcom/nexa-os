@@ -230,6 +230,20 @@ async function deployLibraryAll(req, res) {
 }
 
 /**
+ * POST /api/admin/templates/library/sync-meta
+ * Sinkronisasi status riil template master dengan Meta Cloud API (WABA)
+ */
+async function syncTemplateLibraryMeta(req, res) {
+  try {
+    const data = await adminService.syncTemplateLibraryMetaStatus();
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('syncTemplateLibraryMeta Error:', err.message);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
  * GET /api/admin/templates/:tenantId
  * Template list satu tenant (read-only)
  */
@@ -416,6 +430,7 @@ module.exports = {
   templateStats,
   templatesByTenant,
   getTemplateLibrary,
+  syncTemplateLibraryMeta,
   getTenantPreviewContext,
   deployLibraryToTenant,
   deployLibraryAll,

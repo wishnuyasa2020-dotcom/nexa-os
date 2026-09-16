@@ -705,7 +705,7 @@ async function getTemplatesByTenant(tenantId) {
 /**
  * Memastikan tabel template_library di DB nexamain sudah ada dan terisi 27 template ontologi
  */
-async function ensureTemplateLibrary() {
+async function ensureTemplateLibrary(forceRefresh = false) {
   await mainPool.query(`
     CREATE TABLE IF NOT EXISTS template_library (
       id_template VARCHAR(50) NOT NULL PRIMARY KEY,
@@ -728,7 +728,7 @@ async function ensureTemplateLibrary() {
   `);
 
   const [countRows] = await mainPool.query('SELECT COUNT(*) as cnt FROM template_library');
-  if (countRows[0].cnt === 0) {
+  if (countRows[0].cnt === 0 || forceRefresh) {
     for (const tpl of DEFAULT_TEMPLATES_LIBRARY) {
       await mainPool.query(`
         INSERT INTO template_library
@@ -743,15 +743,17 @@ async function ensureTemplateLibrary() {
           meta_buttons = VALUES(meta_buttons),
           parameters = VALUES(parameters),
           kategori = VALUES(kategori),
-          urutan = VALUES(urutan)
+          urutan = VALUES(urutan),
+          status_crm = VALUES(status_crm),
+          meta_status = VALUES(meta_status)
       `, [
         tpl.id_template, tpl.pipeline, tpl.nama_template, tpl.template_name_api, tpl.language_code || 'id',
         tpl.body_text, tpl.meta_buttons || null, tpl.parameters || null, tpl.kategori || null,
-        tpl.urutan || 1, tpl.status_crm || 'ACTIVE', tpl.meta_status || 'APPROVED',
+        tpl.urutan || 1, tpl.status_crm || 'INACTIVE', tpl.meta_status || 'DELETED',
         tpl.header_type || null, tpl.header_url || null
       ]);
     }
-    console.log(`[Template Library] Initialized & seeded ${DEFAULT_TEMPLATES_LIBRARY.length} templates in main DB.`);
+    console.log(`[Template Library] Initialized & seeded/refreshed ${DEFAULT_TEMPLATES_LIBRARY.length} templates in main DB.`);
   }
 }
 
@@ -960,6 +962,99 @@ async function deployLibraryAll() {
   }
 
   return results;
+}
+
+/**
+ * POST /api/admin/templates/library/sync-meta
+ * Mengambil status template langsung dari Meta Cloud API (WABA) dan memperbarui tabel template_library di nexamain
+ */
+async function syncTemplateLibraryMetaStatus() {
+  await ensureTemplateLibrary(true);
+
+  const token = process.env.WA_ACCESS_TOKEN;
+  const wabaId = process.env.WA_WABA_ID || '998971032230678';
+
+  if (!token || !wabaId) {
+    throw new Error('Kredensial WhatsApp (WA_ACCESS_TOKEN / WA_WABA_ID) belum dikonfigurasi di server backend.');
+  }
+
+  // 1. Fetch seluruh template aktif dari Meta Cloud API dengan pagination
+  let metaTemplates = [];
+  let nextUrl = `https://graph.facebook.com/v19.0/${wabaId}/message_templates?fields=id,name,status,quality_rating,components&limit=100`;
+
+  while (nextUrl) {
+    try {
+      const resp = await axios.get(nextUrl, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 20000,
+      });
+      metaTemplates = metaTemplates.concat(resp.data?.data || []);
+      nextUrl = resp.data?.paging?.next || null;
+    } catch (apiErr) {
+      const msg = apiErr.response?.data?.error?.message || apiErr.message;
+      throw new Error(`Gagal menghubungi Meta Graph API: ${msg}`);
+    }
+  }
+
+  const metaMap = new Map();
+  metaTemplates.forEach(mt => {
+    const btnComp = (mt.components || []).filter(c => c.type === 'BUTTONS');
+    const buttons = btnComp.length > 0 ? JSON.stringify(btnComp[0].buttons || []) : null;
+    metaMap.set((mt.name || '').toLowerCase(), {
+      status: mt.status,
+      quality: mt.quality_rating || null,
+      buttons
+    });
+  });
+
+  // 2. Ambil seluruh template di template_library
+  const [dbTemplates] = await mainPool.query(
+    'SELECT id_template, template_name_api, meta_status, status_crm FROM template_library'
+  );
+
+  let approvedCount = 0;
+  let deletedCount = 0;
+  let otherCount = 0;
+
+  for (const tpl of dbTemplates) {
+    const apiName = (tpl.template_name_api || '').toLowerCase();
+    if (metaMap.has(apiName)) {
+      const metaData = metaMap.get(apiName);
+      const isApproved = metaData.status === 'APPROVED';
+      const newStatusCrm = isApproved ? 'ACTIVE' : 'INACTIVE';
+
+      await mainPool.query(`
+        UPDATE template_library
+        SET meta_status = ?,
+            status_crm = ?,
+            meta_buttons = COALESCE(?, meta_buttons),
+            updated_at = NOW()
+        WHERE id_template = ?
+      `, [metaData.status, newStatusCrm, metaData.buttons, tpl.id_template]);
+
+      if (isApproved) approvedCount++;
+      else otherCount++;
+    } else {
+      // Tidak ditemukan di Meta Cloud API -> tandai DELETED / UNREGISTERED
+      await mainPool.query(`
+        UPDATE template_library
+        SET meta_status = 'DELETED',
+            status_crm = 'INACTIVE',
+            updated_at = NOW()
+        WHERE id_template = ?
+      `, [tpl.id_template]);
+      deletedCount++;
+    }
+  }
+
+  return {
+    totalMeta: metaTemplates.length,
+    totalLibrary: dbTemplates.length,
+    approvedCount,
+    deletedCount,
+    otherCount,
+    message: `Sinkronisasi selesai: ${approvedCount} template Approved Meta, ${deletedCount} belum/dihapus di Meta.`
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1291,6 +1386,7 @@ module.exports = {
   getTemplateStats,
   getTemplatesByTenant,
   getTemplateLibrary,
+  syncTemplateLibraryMetaStatus,
   getTenantPreviewContext,
   deployLibraryToTenant,
   deployLibraryAll,

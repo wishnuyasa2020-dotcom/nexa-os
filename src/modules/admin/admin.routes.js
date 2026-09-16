@@ -30,6 +30,7 @@ router.get('/activity', ctrl.activity);
 
 // Pustaka Template NexaMOS (27 Template Master Library) & Deployer
 router.get('/templates/library',                            ctrl.getTemplateLibrary);
+router.post('/templates/library/sync-meta',                  ctrl.syncTemplateLibraryMeta);
 router.get('/templates/preview-context/:tenantId',          ctrl.getTenantPreviewContext);
 router.post('/templates/library/deploy-all',                ctrl.deployLibraryAll);
 router.post('/templates/library/deploy/:tenantId',          ctrl.deployLibraryToTenant);
