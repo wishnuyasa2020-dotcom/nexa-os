@@ -945,45 +945,44 @@ async function approveBetaApplication(id, reviewerName = 'Super Admin') {
     console.warn(`[Beta Provisioning] Gagal injeksi template library ke ${tenantId}:`, tmplErr.message);
   }
 
-  // 6. Kirim Email Aktivasi Akun Siap Pakai (Non-blocking)
-  const transporter = getEmailTransporter();
-  if (transporter) {
-    const loginUrl = 'https://crm.nexamos.cloud/login';
-    transporter.sendMail({
-      from: `"Nexa MOS Support" <${process.env.SMTP_USER}>`,
-      to: app.admin_email,
-      subject: `🎉 Akun CRM Nexa MOS Anda Telah Aktif — ${brand}`,
-      html: `
-        <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
-          <div style="text-align: center; margin-bottom: 24px;">
-            <h2 style="color: #04080f; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">Nexa<span style="color:#00d68f;">MOS</span></h2>
-            <p style="color: #64748b; font-size: 13px; margin-top: 4px;">CRM Berbasis Bukti untuk LPK &amp; Lembaga Pendidikan</p>
-          </div>
-          <p style="font-size: 15px; line-height: 1.6;">Selamat <strong>${app.admin_name}</strong>,</p>
-          <p style="font-size: 14.5px; line-height: 1.6; color: #334155;">
-            Permohonan Closed Beta untuk lembaga <strong>${brand}</strong> telah disetujui! Database mandiri dan ruang kerja CRM Anda telah selesai dikurasi serta siap digunakan.
-          </p>
-          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 18px; margin: 24px 0;">
-            <p style="margin: 0 0 10px; font-size: 13.5px; font-weight: 700; color: #0f172a;">Informasi Akses Login Anda:</p>
-            <p style="margin: 6px 0; font-size: 13.5px;"><strong>URL Login:</strong> <a href="${loginUrl}" style="color:#00d68f;font-weight:600;">crm.nexamos.cloud/login</a></p>
-            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Username:</strong> <code style="background:#e2e8f0;padding:2px 6px;border-radius:4px;font-weight:700;">${adminUsername}</code></p>
-            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Email:</strong> ${app.admin_email}</p>
-            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Password:</strong> <em>(Gunakan password yang Anda daftarkan)</em></p>
-            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Tenant ID:</strong> <code>${tenantId}</code></p>
-            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Paket:</strong> Free Tier Closed Beta (300 Siswa / 10 Sekolah)</p>
-          </div>
-          <div style="text-align: center; margin: 28px 0;">
-            <a href="${loginUrl}" style="display: inline-block; background-color: #00d68f; color: #04080f; padding: 13px 30px; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 15px;">Masuk ke Dashboard CRM &rarr;</a>
-          </div>
-          <p style="font-size: 12px; color: #64748b; line-height: 1.5;">Jika email ini masuk ke tab Promosi atau folder Spam, mohon klik <em>"Bukan Spam"</em> agar Anda selalu menerima notifikasi operasional siswa dan reminder.</p>
-          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0 16px;" />
-          <p style="font-size: 11.5px; color: #94a3b8; text-align: center; margin: 0;">&copy; 2026 Nexa MOS Onboarding Team &middot; All rights reserved.</p>
+  // 6. Kirim Email Aktivasi Akun via Gmail API (HTTPS, bypass Render SMTP block)
+  const loginUrl = 'https://crm.nexamos.cloud/login';
+  sendGmailAPI({
+    from: '"Nexa MOS Support"',
+    to: app.admin_email,
+    subject: `🎉 Akun CRM Nexa MOS Anda Telah Aktif — ${brand}`,
+    html: `
+      <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
+        <div style="text-align: center; margin-bottom: 24px;">
+          <h2 style="color: #04080f; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">Nexa<span style="color:#00d68f;">MOS</span></h2>
+          <p style="color: #64748b; font-size: 13px; margin-top: 4px;">CRM Berbasis Bukti untuk LPK &amp; Lembaga Pendidikan</p>
         </div>
-      `
-    }).catch(mailErr => {
-      console.warn('[Beta Onboarding] Gagal kirim email aktivasi:', mailErr.message);
-    });
-  }
+        <p style="font-size: 15px; line-height: 1.6;">Selamat <strong>${app.admin_name}</strong>,</p>
+        <p style="font-size: 14.5px; line-height: 1.6; color: #334155;">
+          Permohonan Closed Beta untuk lembaga <strong>${brand}</strong> telah disetujui! Database mandiri dan ruang kerja CRM Anda telah selesai dikurasi serta siap digunakan.
+        </p>
+        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 18px; margin: 24px 0;">
+          <p style="margin: 0 0 10px; font-size: 13.5px; font-weight: 700; color: #0f172a;">Informasi Akses Login Anda:</p>
+          <p style="margin: 6px 0; font-size: 13.5px;"><strong>URL Login:</strong> <a href="${loginUrl}" style="color:#00d68f;font-weight:600;">crm.nexamos.cloud/login</a></p>
+          <p style="margin: 6px 0; font-size: 13.5px;"><strong>Username:</strong> <code style="background:#e2e8f0;padding:2px 6px;border-radius:4px;font-weight:700;">${adminUsername}</code></p>
+          <p style="margin: 6px 0; font-size: 13.5px;"><strong>Email:</strong> ${app.admin_email}</p>
+          <p style="margin: 6px 0; font-size: 13.5px;"><strong>Password:</strong> <em>(Gunakan password yang Anda daftarkan)</em></p>
+          <p style="margin: 6px 0; font-size: 13.5px;"><strong>Tenant ID:</strong> <code>${tenantId}</code></p>
+          <p style="margin: 6px 0; font-size: 13.5px;"><strong>Paket:</strong> Free Tier Closed Beta (300 Siswa / 10 Sekolah)</p>
+        </div>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${loginUrl}" style="display: inline-block; background-color: #00d68f; color: #04080f; padding: 13px 30px; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 15px;">Masuk ke Dashboard CRM &rarr;</a>
+        </div>
+        <p style="font-size: 12px; color: #64748b; line-height: 1.5;">Jika email ini masuk ke tab Promosi atau folder Spam, mohon klik <em>"Bukan Spam"</em> agar Anda selalu menerima notifikasi operasional siswa dan reminder.</p>
+        <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0 16px;" />
+        <p style="font-size: 11.5px; color: #94a3b8; text-align: center; margin: 0;">&copy; 2026 Nexa MOS Onboarding Team &middot; All rights reserved.</p>
+      </div>
+    `,
+  }).then(() => {
+    console.log(`[Beta Onboarding] Email aktivasi berhasil dikirim via Gmail API ke ${app.admin_email}`);
+  }).catch(mailErr => {
+    console.warn('[Beta Onboarding] Gagal kirim email aktivasi via Gmail API:', mailErr.message);
+  });
 
   return {
     tenantId,
