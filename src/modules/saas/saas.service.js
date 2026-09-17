@@ -433,12 +433,13 @@ async function registerTenantSelfService({ brand_name, admin_name, admin_email, 
     };
 
     // 4d. Injeksi Periode Marketing Default
-    const [periods] = await tenantConn.query('SELECT id FROM marketing_period WHERE is_active = 1');
+    const [periods] = await tenantConn.query('SELECT id_period FROM marketing_period WHERE status = ?', ['aktif']);
     if (periods.length === 0) {
+      const currentYear = new Date().getFullYear();
       await tenantConn.query(`
-        INSERT INTO marketing_period (nama_periode, is_active, created_date)
-        VALUES ('2026/2027', 1, NOW())
-      `);
+        INSERT IGNORE INTO marketing_period (id_period, nama_period, start_date, end_date, status, created_date, created_by)
+        VALUES (?, ?, ?, ?, 'aktif', NOW(), 'System')
+      `, [`PER-${currentYear}`, `${currentYear}/${currentYear + 1}`, `${currentYear}-01-01`, `${currentYear}-12-31`]);
     }
 
     // 4e. Catat event awal ke events_log
@@ -961,14 +962,24 @@ async function approveBetaApplication(id, reviewerName = 'Super Admin') {
     if (existingUsers.length > 0) {
       await tenantConn.query(`
         UPDATE users
-        SET username = ?, email = ?, password = ?, salt = ?, role = 'Super Admin', nama = ?, status = 'aktif'
+        SET username = ?, email = ?, password = ?, salt = ?, role = 'Admin', nama = ?, status = 'aktif'
         WHERE id = ?
       `, [adminUsername, app.admin_email, hash, salt, app.admin_name, existingUsers[0].id]);
     } else {
       await tenantConn.query(`
         INSERT INTO users (username, password, salt, role, nama, email, status)
-        VALUES (?, ?, ?, 'Super Admin', ?, ?, 'aktif')
+        VALUES (?, ?, ?, 'Admin', ?, ?, 'aktif')
       `, [adminUsername, hash, salt, app.admin_name, app.admin_email]);
+    }
+
+    // 5d. Injeksi Periode/Cohort Marketing Default jika belum ada
+    const [existingPeriods] = await tenantConn.query('SELECT id_period FROM marketing_period WHERE status = ?', ['aktif']);
+    if (existingPeriods.length === 0) {
+      const currentYear = new Date().getFullYear();
+      await tenantConn.query(`
+        INSERT IGNORE INTO marketing_period (id_period, nama_period, start_date, end_date, status, created_date, created_by)
+        VALUES (?, ?, ?, ?, 'aktif', NOW(), 'System')
+      `, [`PER-${currentYear}`, `${currentYear}/${currentYear + 1}`, `${currentYear}-01-01`, `${currentYear}-12-31`]);
     }
   } finally {
     await tenantConn.end();

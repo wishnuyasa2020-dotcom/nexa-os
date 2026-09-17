@@ -32,7 +32,7 @@ function _formatCohortId(idPeriod, namaPeriod) {
  * Mengambil daftar seluruh Cohort beserta statistik total siswa & sekolah
  */
 async function getAllCohorts() {
-  const [rows] = await pool.query(
+  let [rows] = await pool.query(
     `SELECT 
       id_period,
       nama_period,
@@ -47,6 +47,29 @@ async function getAllCohorts() {
       created_date DESC, 
       nama_period DESC`
   );
+
+  // Self-Healing: Jika database tenant belum memiliki record periode, buatkan periode aktif default
+  if (!rows || rows.length === 0) {
+    const currentYear = new Date().getFullYear();
+    const defaultPeriodId = `PER-${currentYear}`;
+    const defaultPeriodName = `${currentYear}/${currentYear + 1}`;
+    try {
+      await pool.query(
+        `INSERT IGNORE INTO marketing_period (id_period, nama_period, start_date, end_date, status, created_date, created_by)
+         VALUES (?, ?, ?, ?, 'aktif', NOW(), 'System')`,
+        [defaultPeriodId, defaultPeriodName, `${currentYear}-01-01`, `${currentYear}-12-31`]
+      );
+      const [freshRows] = await pool.query(
+        `SELECT id_period, nama_period, start_date, end_date, status, created_date, created_by
+         FROM marketing_period ORDER BY created_date DESC LIMIT 1`
+      );
+      if (freshRows && freshRows.length > 0) {
+        rows = freshRows;
+      }
+    } catch (healErr) {
+      console.warn('[CohortService] Self-healing marketing_period error:', healErr.message);
+    }
+  }
 
   // Ambil count agregasi per cohort
   const [siswaCounts] = await pool.query(
