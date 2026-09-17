@@ -168,6 +168,7 @@ async function applyBeta(req, res) {
   try {
     const {
       brand_name,
+      tenant_type,
       institution_type,
       institution_address,
       team_size,
@@ -179,6 +180,7 @@ async function applyBeta(req, res) {
 
     const data = await saasService.applyBetaApplication({
       brand_name,
+      tenant_type,
       institution_type,
       institution_address,
       team_size,

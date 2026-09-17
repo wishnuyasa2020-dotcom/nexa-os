@@ -15,6 +15,7 @@ router.get('/tenant', ctrl.tenant);
 router.post('/tenant', ctrl.addTenant);
 router.post('/tenant/addon', ctrl.addonCro);
 router.put('/tenant/tier', ctrl.updateTier);
+router.put('/tenant/type', ctrl.updateTenantType);
 router.put('/tenant/whatsapp', ctrl.updateWhatsapp);
 
 // ── WhatsApp Provisioning Requests (Superadmin) ─────────────────

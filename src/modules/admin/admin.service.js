@@ -89,10 +89,16 @@ async function getOverview() {
 }
 
 async function getTenant() {
+  // Self-healing: Pastikan kolom tenant_type ada di tabel tenants
+  await mainPool.query(`
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS
+      tenant_type ENUM('lpk','general') NOT NULL DEFAULT 'lpk'
+  `).catch(() => {}); // silent jika sudah ada
+
   // Ambil profil semua tenant dari Main DB
   const [rows] = await mainPool.query(`
     SELECT 
-      tenant_id, brand_name, tier, status, billing_cycle,
+      tenant_id, brand_name, tenant_type, tier, status, billing_cycle,
       limit_siswa, used_siswa, limit_sekolah, used_sekolah,
       max_cro, max_admin, max_manager, max_chief_cro,
       current_period_start, current_period_end, next_quota_reset,
@@ -161,6 +167,7 @@ async function getTenant() {
       sekolahAktif: sekolahCnt,
       activeTemplates: 3,
       lastIncomingMsg: null,
+      tenantType: d.tenant_type || 'lpk',
       whatsappStatus: d.whatsapp_status || (d.whatsapp_phone_id ? 'CONNECTED' : 'NOT_CONFIGURED'),
       whatsappPhoneId: d.whatsapp_phone_id || '',
       whatsappWabaId: d.whatsapp_waba_id || '',
@@ -174,6 +181,21 @@ async function getTenant() {
   }
 
   return results;
+}
+
+/**
+ * Update tenant_type — hanya bisa dilakukan Superadmin
+ * (untuk koreksi jika tenant salah pilih tipe saat onboarding)
+ */
+async function updateTenantType(tenantId, tenantType) {
+  if (!['lpk', 'general'].includes(tenantType)) {
+    throw new Error('Tipe tenant tidak valid. Harus \'lpk\' atau \'general\'.');
+  }
+  await mainPool.query(
+    'UPDATE tenants SET tenant_type = ? WHERE tenant_id = ?',
+    [tenantType, tenantId]
+  );
+  return { tenantId, tenantType };
 }
 
 async function getUsageStats() {
@@ -1397,5 +1419,5 @@ module.exports = {
   rejectWhatsappRequest,
   triggerWhatsappOtp,
   verifyWhatsappOtp,
+  updateTenantType,
 };
-

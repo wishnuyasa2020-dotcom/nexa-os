@@ -148,6 +148,24 @@ async function updateTier(req, res) {
 }
 
 /**
+ * PUT /api/admin/tenant/type
+ * Superadmin mengubah tipe tenant (lpk / general) — untuk koreksi salah pilih
+ */
+async function updateTenantType(req, res) {
+  try {
+    const { tenantId, tenantType } = req.body;
+    if (!tenantId || !tenantType) {
+      return res.status(400).json({ status: 'error', message: 'tenantId dan tenantType wajib diisi.' });
+    }
+    const data = await adminService.updateTenantType(tenantId, tenantType);
+    res.json({ status: 'ok', data, message: `Tipe tenant berhasil diubah menjadi: ${tenantType}` });
+  } catch (err) {
+    console.error('updateTenantType Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
  * PUT /api/admin/tenant/whatsapp
  */
 async function updateWhatsapp(req, res) {
@@ -422,6 +440,7 @@ module.exports = {
   addTenant,
   addonCro,
   updateTier,
+  updateTenantType,
   updateWhatsapp,
   usage,
   users,

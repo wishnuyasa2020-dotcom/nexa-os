@@ -549,6 +549,7 @@ async function getBetaStatus() {
  */
 async function applyBetaApplication({
   brand_name,
+  tenant_type,
   institution_type,
   institution_address,
   team_size,
@@ -601,15 +602,23 @@ async function applyBetaApplication({
   // 4. Enkripsi Password untuk disimpan secara aman
   const encryptedPassword = encryptPassword(admin_password);
 
+  // 4.5 Self-healing: Pastikan kolom tenant_type ada
+  await mainPool.query(`
+    ALTER TABLE beta_applications ADD COLUMN IF NOT EXISTS
+      tenant_type ENUM('lpk','general') NOT NULL DEFAULT 'lpk'
+  `).catch(() => {}); // silent jika sudah ada atau DB tidak support IF NOT EXISTS
+
   // 5. Simpan ke tabel beta_applications
+  const tenantTypeValue = (tenant_type === 'general') ? 'general' : 'lpk';
   const [insertRes] = await mainPool.query(`
     INSERT INTO beta_applications (
-      brand_name, institution_type, institution_address, team_size,
+      brand_name, tenant_type, institution_type, institution_address, team_size,
       admin_name, admin_email, admin_password_hash, whatsapp_number,
       status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
     brand,
+    tenantTypeValue,
     instType,
     instAddress,
     teamSize,
