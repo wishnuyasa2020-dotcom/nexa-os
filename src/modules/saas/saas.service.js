@@ -923,13 +923,13 @@ async function approveBetaApplication(id, reviewerName = 'Super Admin') {
     if (existingUsers.length > 0) {
       await tenantConn.query(`
         UPDATE users
-        SET password = ?, salt = ?, role = 'Super Admin', nama = ?, aktif = 1, is_approved = 1
+        SET password = ?, salt = ?, role = 'Super Admin', nama = ?, status = 'aktif'
         WHERE id = ?
       `, [hash, salt, app.admin_name, existingUsers[0].id]);
     } else {
       await tenantConn.query(`
-        INSERT INTO users (username, password, salt, role, nama, email, aktif, is_approved)
-        VALUES (?, ?, ?, 'Super Admin', ?, ?, 1, 1)
+        INSERT INTO users (username, password, salt, role, nama, email, status)
+        VALUES (?, ?, ?, 'Super Admin', ?, ?, 'aktif')
       `, [adminUsername, hash, salt, app.admin_name, app.admin_email]);
     }
   } finally {
