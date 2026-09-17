@@ -21,6 +21,7 @@ function getEmailTransporter() {
     port: parseInt(process.env.SMTP_PORT || '587', 10),
     secure: process.env.SMTP_SECURE === 'true',
     auth: { user, pass },
+    family: 4, // Force IPv4 — Render Free tier tidak support koneksi outbound IPv6
   });
 }
 
