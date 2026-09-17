@@ -1,18 +1,8 @@
 'use strict';
 
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
-const { mainPool, pool, tenantStorage } = require('../../config/database');
+const { sendGmailAPI } = require('../../utils/mailer');
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: Number(process.env.SMTP_PORT) || 587,
-  secure: process.env.SMTP_SECURE === 'true',
-  auth: {
-    user: process.env.SMTP_USER || 'wishnuyasa2020@gmail.com',
-    pass: process.env.SMTP_PASS,
-  },
-});
 
 /**
  * Format tanggal ke format WIB Indonesia yang rapi
@@ -45,8 +35,8 @@ async function _sendSuperadminNotificationEmail({
   const superadminEmail = process.env.SUPERADMIN_EMAIL || 'wishnuyasa2020@gmail.com';
   const smtpUser = process.env.SMTP_USER || 'wishnuyasa2020@gmail.com';
 
-  if (!process.env.SMTP_PASS) {
-    console.warn('[WhatsAppSettings] Warning: SMTP_PASS belum dikonfigurasi, notifikasi email Superadmin dilewati.');
+  if (!process.env.GMAIL_REFRESH_TOKEN) {
+    console.warn('[WhatsAppSettings] Warning: GMAIL_REFRESH_TOKEN belum dikonfigurasi, notifikasi email Superadmin dilewati.');
     return;
   }
 
@@ -185,14 +175,14 @@ async function _sendSuperadminNotificationEmail({
 </html>
   `;
 
-  await transporter.sendMail({
-    from: `"Nexa MOS System" <${smtpUser}>`,
+  await sendGmailAPI({
+    from: '"Nexa MOS System"',
     to: superadminEmail,
-    subject: `🔔 Permohonan Registrasi WABA Baru: ${displayBrand} (${formattedNumber})`,
+    subject: `🔔 New WABA Registration Request: ${displayBrand} (${formattedNumber})`,
     html: htmlContent,
   });
 
-  console.log(`[WhatsAppSettings] Notifikasi email berhasil dikirim ke Superadmin (${superadminEmail}) untuk permohonan WABA ${tenantId}.`);
+  console.log(`[WhatsAppSettings] Superadmin notification sent via Gmail API (${superadminEmail}) for WABA ${tenantId}.`);
 }
 
 /**

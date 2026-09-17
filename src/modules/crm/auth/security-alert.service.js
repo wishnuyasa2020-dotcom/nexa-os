@@ -1,18 +1,7 @@
 'use strict';
 
-const nodemailer = require('nodemailer');
-const crypto = require('crypto');
-const { pool, tenantStorage } = require('../../../config/database');
+const { sendGmailAPI } = require('../../../utils/mailer');
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: Number(process.env.SMTP_PORT) || 587,
-  secure: process.env.SMTP_SECURE === 'true',
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
 
 /**
  * Format tanggal ke format WIB Indonesia yang rapi
@@ -279,19 +268,19 @@ async function notifyCredentialChange({
   </html>
   `;
 
-  // 6. Kirim Email secara Asynchronous (Non-blocking)
+  // 6. Send Security Alert Email via Gmail API (non-blocking)
   let emailSent = false;
   try {
-    const info = await transporter.sendMail({
-      from: `"Nexa Security Guard" <${process.env.SMTP_USER || 'no-reply@nexa.id'}>`,
+    await sendGmailAPI({
+      from: '"NexaMOS Security Guard"',
       to: allRecipients.join(', '),
       subject: subject,
       html: emailHtml,
     });
     emailSent = true;
-    console.log(`[SecurityAlert] Alert sent successfully for user ${targetUser.username} to ${allRecipients.join(', ')} (MessageID: ${info.messageId})`);
+    console.log(`[SecurityAlert] Alert sent via Gmail API for user ${targetUser.username} to ${allRecipients.join(', ')}`);
   } catch (mailErr) {
-    console.error('[SecurityAlert] Gagal mengirim email alert keamanan:', mailErr.message);
+    console.error('[SecurityAlert] Failed to send security alert email:', mailErr.message);
   }
 
   // 7. Rekam Event-Sourcing ke events_log

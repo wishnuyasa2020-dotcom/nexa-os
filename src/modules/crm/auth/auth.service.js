@@ -239,18 +239,9 @@ async function login(username, password) {
   };
 }
 
-// ── Lupa Password & Reset Password ──────────────────────────────────────
-const nodemailer = require('nodemailer');
+// ── Forgot Password & Reset Password ────────────────────────────────────
+const { sendGmailAPI } = require('../../../utils/mailer');
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: Number(process.env.SMTP_PORT) || 587,
-  secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
-  auth: {
-    user: process.env.SMTP_USER, 
-    pass: process.env.SMTP_PASS,
-  },
-});
 
 async function forgotPassword(email) {
   if (!email) return { success: false, message: 'Email tidak boleh kosong.' };
@@ -321,25 +312,32 @@ async function forgotPassword(email) {
   const frontendUrl = process.env.FRONTEND_URL || 'https://crm.nexamos.cloud';
   const resetLink = `${frontendUrl}/reset-password?token=${token}`;
 
-  // Kirim email
+  // Send password reset email via Gmail API
   try {
-    await transporter.sendMail({
-      from: `"Nexa CRM" <${process.env.SMTP_USER || 'no-reply@nexa.id'}>`,
+    await sendGmailAPI({
+      from: '"NexaMOS Security"',
       to: cleanEmail,
-      subject: 'Reset Password - Nexa CRM',
+      subject: 'Password Reset Request — NexaMOS CRM',
       html: `
-        <h3>Halo ${targetUser.nama || targetUser.username},</h3>
-        <p>Kami menerima permintaan untuk mereset password akun Anda di Nexa CRM.</p>
-        <p>Silakan klik tautan di bawah ini untuk mengatur password baru:</p>
-        <a href="${resetLink}" style="display:inline-block;padding:10px 15px;background:#007BFF;color:#fff;text-decoration:none;border-radius:5px;">Reset Password</a>
-        <br><br>
-        <p>Tautan ini akan kedaluwarsa dalam 1 jam.</p>
-        <p>Jika Anda tidak pernah meminta reset password, abaikan email ini.</p>
+        <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 560px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
+          <div style="text-align: center; margin-bottom: 24px;">
+            <h2 style="color: #04080f; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">Nexa<span style="color:#00d68f;">MOS</span></h2>
+            <p style="color: #64748b; font-size: 13px; margin-top: 4px;">Account Security</p>
+          </div>
+          <p style="font-size: 15px; line-height: 1.6;">Hi <strong>${targetUser.nama || targetUser.username}</strong>,</p>
+          <p style="font-size: 14px; line-height: 1.6; color: #334155;">We received a request to reset the password for your NexaMOS CRM account. Click the button below to set a new password:</p>
+          <div style="text-align: center; margin: 28px 0;">
+            <a href="${resetLink}" style="display: inline-block; background-color: #2563eb; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 15px;">Reset My Password &rarr;</a>
+          </div>
+          <p style="font-size: 13px; color: #64748b; line-height: 1.5;">This link will expire in <strong>1 hour</strong>. If you did not request a password reset, you can safely ignore this email &mdash; your account remains secure.</p>
+          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0 16px;" />
+          <p style="font-size: 11.5px; color: #94a3b8; text-align: center; margin: 0;">&copy; 2026 NexaMOS Security Team &middot; All rights reserved.</p>
+        </div>
       `,
     });
-    console.log('[Auth] Forgot password email sent to:', cleanEmail);
+    console.log('[Auth] Password reset email sent via Gmail API to:', cleanEmail);
   } catch (err) {
-    console.error('[Auth] Failed to send email:', err.message);
+    console.error('[Auth] Failed to send password reset email:', err.message);
   }
 
   return { success: true, message: 'Jika email terdaftar, instruksi reset password telah dikirimkan.' };

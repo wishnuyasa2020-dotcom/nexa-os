@@ -4,18 +4,8 @@ const crypto = require('crypto');
 const mysql = require('mysql2/promise');
 const axios = require('axios');
 const { pool, mainPool } = require('../../config/database');
-const nodemailer = require('nodemailer');
-const { DEFAULT_TEMPLATES_LIBRARY } = require('./defaultTemplates.data');
+const { sendGmailAPI } = require('../../utils/mailer');
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: Number(process.env.SMTP_PORT) || 587,
-  secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
 
 /**
  * Nexa Control Centre — Admin Service
@@ -397,30 +387,39 @@ async function provisionNewTenant(payload) {
     console.warn(`[Provisioning] Gagal injeksi template library ke ${tenantId}:`, tmplErr.message);
   }
 
-  // Kirim email kredensial ke Admin
+  // Send credential email to Admin via Gmail API
   try {
-    const mailOptions = {
-      from: `"Nexa OS Support" <${process.env.SMTP_USER}>`,
+    const loginUrl = process.env.FRONTEND_URL ? `${process.env.FRONTEND_URL}/login` : 'https://crm.nexamos.cloud/login';
+    await sendGmailAPI({
+      from: '"NexaMOS Support"',
       to: adminEmail,
-      subject: `Selamat Datang di Nexa CRM - Kredensial Akses ${brand}`,
+      subject: `Welcome to NexaMOS CRM — Your Access Credentials for ${brand}`,
       html: `
-        <h2>Halo, Admin ${brand}!</h2>
-        <p>Tenant Anda berhasil dibuat dan telah aktif. Berikut adalah kredensial akses untuk akun Super Admin Anda:</p>
-        <ul>
-          <li><strong>URL Login:</strong> <a href="http://localhost:3000/login">http://localhost:3000/login</a></li>
-          <li><strong>Username:</strong> ${adminUsername}</li>
-          <li><strong>Password:</strong> ${adminPassword}</li>
-        </ul>
-        <p>Harap segera login dan ubah password Anda demi keamanan.</p>
-        <br/>
-        <p>Terima kasih,</p>
-        <p>Tim Nexa OS</p>
-      `
-    };
-    await transporter.sendMail(mailOptions);
-    console.log(`[Provisioning] Kredensial admin berhasil dikirim ke ${adminEmail}`);
+        <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
+          <div style="text-align: center; margin-bottom: 24px;">
+            <h2 style="color: #04080f; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">Nexa<span style="color:#00d68f;">MOS</span></h2>
+            <p style="color: #64748b; font-size: 13px; margin-top: 4px;">Evidence-Based CRM Platform</p>
+          </div>
+          <p style="font-size: 15px; line-height: 1.6;">Hi, <strong>${brand} Admin</strong>!</p>
+          <p style="font-size: 14px; line-height: 1.6; color: #334155;">Your tenant workspace has been successfully provisioned and is now active. Below are your Super Admin login credentials:</p>
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #00d68f; padding: 16px; border-radius: 6px; margin: 20px 0;">
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Login URL:</strong> <a href="${loginUrl}" style="color: #2563eb; font-weight: 600;">${loginUrl}</a></p>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Tenant ID:</strong> <code style="background:#e2e8f0;padding:2px 6px;border-radius:4px;">${tenantId}</code></p>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Username:</strong> <code style="background:#e2e8f0;padding:2px 6px;border-radius:4px;font-weight:700;">${adminUsername}</code></p>
+            <p style="margin: 6px 0; font-size: 13.5px;"><strong>Password:</strong> <code style="background:#e2e8f0;padding:2px 6px;border-radius:4px;font-weight:700;">${adminPassword}</code></p>
+          </div>
+          <p style="font-size: 13px; color: #ef4444;"><strong>⚠ Security Notice:</strong> Please log in immediately and change your password for security purposes.</p>
+          <div style="text-align: center; margin: 24px 0;">
+            <a href="${loginUrl}" style="display: inline-block; background-color: #00d68f; color: #04080f; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 15px;">Open My CRM Dashboard &rarr;</a>
+          </div>
+          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0 16px;" />
+          <p style="font-size: 11.5px; color: #94a3b8; text-align: center; margin: 0;">&copy; 2026 NexaMOS Onboarding Team &middot; All rights reserved.</p>
+        </div>
+      `,
+    });
+    console.log(`[Provisioning] Credential email sent via Gmail API to ${adminEmail}`);
   } catch (err) {
-    console.error(`[Provisioning] Gagal mengirim email kredensial ke ${adminEmail}:`, err.message);
+    console.error(`[Provisioning] Failed to send credential email to ${adminEmail}:`, err.message);
   }
 
   return { tenantId, brand, adminUsername, adminPassword };
