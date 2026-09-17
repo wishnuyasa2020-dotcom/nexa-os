@@ -761,9 +761,7 @@ async function approveBetaApplication(id, reviewerName = 'Super Admin') {
   if (apps.length === 0) throw new Error('Data permohonan beta tidak ditemukan.');
 
   const app = apps[0];
-  if (app.status === 'APPROVED') {
-    throw new Error(`Permohonan untuk "${app.brand_name}" sudah disetujui sebelumnya (Tenant ID: ${app.approved_tenant_id}).`);
-  }
+  const brand = app.brand_name.trim();
 
   // 2. Dekripsi password calon user
   let plainPassword;
@@ -774,89 +772,107 @@ async function approveBetaApplication(id, reviewerName = 'Super Admin') {
     throw new Error('Gagal mendekripsi password pendaftar.');
   }
 
-  // 3. Generate Tenant ID unik
-  const brand = app.brand_name.trim();
-  let tenantId = brand.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-  if (!tenantId) tenantId = 'tenant-' + Date.now();
-
-  const [existId] = await mainPool.query('SELECT tenant_id FROM tenants WHERE tenant_id = ?', [tenantId]);
-  if (existId.length > 0) {
-    tenantId += '-' + Math.floor(1000 + Math.random() * 9000);
-  }
-
-  // 4. ATOMIC CLAIM DATABASE DARI DB POOL (TRANSACTION + FOR UPDATE)
-  const mainConn = await mainPool.getConnection();
+  let tenantId = app.approved_tenant_id;
   let claimedPoolDb = null;
 
-  try {
-    await mainConn.beginTransaction();
-
-    const [poolRows] = await mainConn.query(`
-      SELECT id, db_host, db_port, db_name, db_user, db_password
-      FROM db_pools
-      WHERE status = 'AVAILABLE'
-      ORDER BY id ASC
-      LIMIT 1
-      FOR UPDATE
-    `);
-
-    if (poolRows.length === 0) {
-      await mainConn.rollback();
-      const err = new Error('Tidak ada database AVAILABLE di DB Pool! Tambahkan database kosong baru di menu DB Pool terlebih dahulu.');
-      err.statusCode = 400;
-      throw err;
+  if (app.status === 'APPROVED') {
+    if (!tenantId) {
+      throw new Error(`Permohonan sudah berstatus APPROVED tetapi tidak memiliki approved_tenant_id.`);
     }
+    // Ambil kredensial database tenant yang sudah di-assign sebelumnya
+    const [tDbs] = await mainPool.query(
+      'SELECT db_host, db_port, db_name, db_user, db_password FROM tenant_databases WHERE tenant_id = ?',
+      [tenantId]
+    );
+    if (tDbs.length === 0) {
+      throw new Error(`Database untuk tenant "${tenantId}" tidak ditemukan di tabel tenant_databases.`);
+    }
+    claimedPoolDb = tDbs[0];
+    console.log(`[Beta Approve] Permohonan "${brand}" (${tenantId}) berstatus APPROVED. Melakukan verifikasi & sinkronisasi akun admin & kirim ulang aktivasi (self-healing)...`);
+  } else {
+    // 3. Generate Tenant ID unik
+    let generatedId = brand.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    if (!generatedId) generatedId = 'tenant-' + Date.now();
 
-    claimedPoolDb = poolRows[0];
+    const [existId] = await mainPool.query('SELECT tenant_id FROM tenants WHERE tenant_id = ?', [generatedId]);
+    if (existId.length > 0) {
+      generatedId += '-' + Math.floor(1000 + Math.random() * 9000);
+    }
+    tenantId = generatedId;
 
-    // Tandai status database menjadi IN_USE
-    await mainConn.query(`
-      UPDATE db_pools
-      SET status = 'IN_USE', assigned_tenant_id = ?, assigned_at = NOW()
-      WHERE id = ?
-    `, [tenantId, claimedPoolDb.id]);
+    // 4. ATOMIC CLAIM DATABASE DARI DB POOL (TRANSACTION + FOR UPDATE)
+    const mainConn = await mainPool.getConnection();
 
-    // Insert ke tabel tenants (Tier: FREE, kuota sesuai S&K)
-    await mainConn.query(`
-      INSERT INTO tenants (
-        tenant_id, brand_name, tier, status,
-        limit_siswa, limit_sekolah,
-        max_admin, max_manager, max_chief_cro, max_cro,
-        whatsapp_phone_id
-      ) VALUES (?, ?, 'FREE', 'ACTIVE', 300, 10, 1, 1, 1, 1, ?)
-    `, [tenantId, brand, app.whatsapp_number || null]);
+    try {
+      await mainConn.beginTransaction();
 
-    // Insert ke tabel tenant_databases
-    await mainConn.query(`
-      INSERT INTO tenant_databases (
-        tenant_id, db_host, db_port, db_name, db_user, db_password
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `, [
-      tenantId,
-      claimedPoolDb.db_host,
-      claimedPoolDb.db_port || 3306,
-      claimedPoolDb.db_name,
-      claimedPoolDb.db_user,
-      claimedPoolDb.db_password
-    ]);
+      const [poolRows] = await mainConn.query(`
+        SELECT id, db_host, db_port, db_name, db_user, db_password
+        FROM db_pools
+        WHERE status = 'AVAILABLE'
+        ORDER BY id ASC
+        LIMIT 1
+        FOR UPDATE
+      `);
 
-    // Update status beta_applications menjadi APPROVED
-    await mainConn.query(`
-      UPDATE beta_applications
-      SET
-        status = 'APPROVED',
-        approved_tenant_id = ?,
-        reviewed_by = ?,
-        reviewed_at = NOW()
-      WHERE id = ?
-    `, [tenantId, reviewerName, id]);
+      if (poolRows.length === 0) {
+        await mainConn.rollback();
+        const err = new Error('Tidak ada database AVAILABLE di DB Pool! Tambahkan database kosong baru di menu DB Pool terlebih dahulu.');
+        err.statusCode = 400;
+        throw err;
+      }
 
-    await mainConn.commit();
-  } catch (txErr) {
-    await mainConn.rollback();
-    throw txErr;
-  } finally {
-    mainConn.release();
+      claimedPoolDb = poolRows[0];
+
+      // Tandai status database menjadi IN_USE
+      await mainConn.query(`
+        UPDATE db_pools
+        SET status = 'IN_USE', assigned_tenant_id = ?, assigned_at = NOW()
+        WHERE id = ?
+      `, [tenantId, claimedPoolDb.id]);
+
+      // Insert ke tabel tenants (Tier: FREE, kuota sesuai S&K)
+      await mainConn.query(`
+        INSERT INTO tenants (
+          tenant_id, brand_name, tier, status,
+          limit_siswa, limit_sekolah,
+          max_admin, max_manager, max_chief_cro, max_cro,
+          whatsapp_phone_id, tenant_type
+        ) VALUES (?, ?, 'FREE', 'ACTIVE', 300, 10, 1, 1, 1, 1, ?, ?)
+      `, [tenantId, brand, app.whatsapp_number || null, app.tenant_type || 'lpk']);
+
+      // Insert ke tabel tenant_databases
+      await mainConn.query(`
+        INSERT INTO tenant_databases (
+          tenant_id, db_host, db_port, db_name, db_user, db_password
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `, [
+        tenantId,
+        claimedPoolDb.db_host,
+        claimedPoolDb.db_port || 3306,
+        claimedPoolDb.db_name,
+        claimedPoolDb.db_user,
+        claimedPoolDb.db_password
+      ]);
+
+      // Update status beta_applications menjadi APPROVED
+      await mainConn.query(`
+        UPDATE beta_applications
+        SET
+          status = 'APPROVED',
+          approved_tenant_id = ?,
+          reviewed_by = ?,
+          reviewed_at = NOW()
+        WHERE id = ?
+      `, [tenantId, reviewerName, id]);
+
+      await mainConn.commit();
+    } catch (txErr) {
+      await mainConn.rollback();
+      throw txErr;
+    } finally {
+      mainConn.release();
+    }
   }
 
   // 5. AUTO-MIGRATION & INJEKSI SKEMA KE DATABASE TENANT
