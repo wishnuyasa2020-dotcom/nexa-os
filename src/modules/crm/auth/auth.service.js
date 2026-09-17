@@ -100,10 +100,12 @@ async function login(username, password) {
   let tenantId = null;
   let activeConn = null;
 
+  const identifier = String(username || '').trim();
+
   // 1. Coba cari di default pool (crmdemo)
   const [[defaultUser]] = await pool.query(
-    'SELECT * FROM users WHERE username = ? LIMIT 1',
-    [String(username).trim()]
+    'SELECT * FROM users WHERE username = ? OR email = ? LIMIT 1',
+    [identifier, identifier]
   );
   
   if (defaultUser) {
@@ -130,7 +132,10 @@ async function login(username, password) {
         const conn = await mysql.createConnection({
           host: t.db_host, port: 3306, user: t.db_user, password: t.db_password, database: t.db_name
         });
-        const [[tUser]] = await conn.query('SELECT * FROM users WHERE username = ? LIMIT 1', [String(username).trim()]);
+        const [[tUser]] = await conn.query(
+          'SELECT * FROM users WHERE username = ? OR email = ? LIMIT 1',
+          [identifier, identifier]
+        );
         
         if (tUser) {
           rows = tUser;
@@ -171,13 +176,13 @@ async function login(username, password) {
         const newHash = _hashSHA256(password, newSalt);
         if (isTenant && activeConn) {
           await activeConn.query(
-            'UPDATE users SET password = ?, salt = ? WHERE username = ?',
-            [newHash, newSalt, String(username).trim()]
+            'UPDATE users SET password = ?, salt = ? WHERE id = ?',
+            [newHash, newSalt, rows.id]
           );
         } else {
           await pool.query(
-            'UPDATE users SET password = ?, salt = ? WHERE username = ?',
-            [newHash, newSalt, String(username).trim()]
+            'UPDATE users SET password = ?, salt = ? WHERE id = ?',
+            [newHash, newSalt, rows.id]
           );
         }
         console.log('[Auth] Password migrated for user:', username);

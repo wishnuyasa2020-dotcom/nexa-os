@@ -169,29 +169,55 @@ async function releasePoolDb(id) {
   if (!mainPool) throw new Error('Main DB pool tidak terhubung.');
 
   const [existing] = await mainPool.query(
-    'SELECT id, status, db_name, assigned_tenant_id FROM db_pools WHERE id = ?',
+    'SELECT * FROM db_pools WHERE id = ?',
     [id]
   );
   if (existing.length === 0) throw new Error('Database pool tidak ditemukan.');
 
-  const pool = existing[0];
+  const poolDb = existing[0];
 
-  if (pool.status !== 'IN_USE') {
-    throw new Error(`Database ${pool.db_name} sudah berstatus ${pool.status}. Tidak perlu direset.`);
+  if (poolDb.status !== 'IN_USE') {
+    throw new Error(`Database ${poolDb.db_name} sudah berstatus ${poolDb.status}. Tidak perlu direset.`);
   }
 
   // Pastikan tenant yang di-assign memang sudah tidak ada
-  if (pool.assigned_tenant_id) {
+  if (poolDb.assigned_tenant_id) {
     const [tenantCheck] = await mainPool.query(
       'SELECT tenant_id FROM tenants WHERE tenant_id = ?',
-      [pool.assigned_tenant_id]
+      [poolDb.assigned_tenant_id]
     );
     if (tenantCheck.length > 0) {
       throw new Error(
-        `Tenant ${pool.assigned_tenant_id} masih aktif di tabel tenants. ` +
+        `Tenant ${poolDb.assigned_tenant_id} masih aktif di tabel tenants. ` +
         `Tidak boleh melepaskan pool yang masih terkait tenant aktif.`
       );
     }
+  }
+
+  // Bersihkan sisa data tabel di database pool agar benar-benar fresh
+  try {
+    const poolConn = await mysql.createConnection({
+      host: poolDb.db_host,
+      port: poolDb.db_port || 3306,
+      user: poolDb.db_user,
+      password: poolDb.db_password,
+      database: poolDb.db_name,
+    });
+
+    await poolConn.query('SET FOREIGN_KEY_CHECKS = 0');
+    const [tables] = await poolConn.query('SHOW TABLES');
+    if (tables && tables.length > 0) {
+      const tableKey = Object.keys(tables[0])[0];
+      for (const row of tables) {
+        const tbl = row[tableKey];
+        await poolConn.query(`TRUNCATE TABLE \`${tbl}\``);
+      }
+    }
+    await poolConn.query('SET FOREIGN_KEY_CHECKS = 1');
+    await poolConn.end();
+    console.log(`[DB Pool Release] Berhasil mengosongkan/sanitasi seluruh tabel di ${poolDb.db_name}`);
+  } catch (cleanErr) {
+    console.warn(`[DB Pool Release] Gagal mengosongkan tabel di ${poolDb.db_name}:`, cleanErr.message);
   }
 
   await mainPool.query(
@@ -201,8 +227,8 @@ async function releasePoolDb(id) {
 
   return {
     id,
-    dbName: pool.db_name,
-    previousTenantId: pool.assigned_tenant_id,
+    dbName: poolDb.db_name,
+    previousTenantId: poolDb.assigned_tenant_id,
     status: 'AVAILABLE',
   };
 }
@@ -935,9 +961,9 @@ async function approveBetaApplication(id, reviewerName = 'Super Admin') {
     if (existingUsers.length > 0) {
       await tenantConn.query(`
         UPDATE users
-        SET password = ?, salt = ?, role = 'Super Admin', nama = ?, status = 'aktif'
+        SET username = ?, email = ?, password = ?, salt = ?, role = 'Super Admin', nama = ?, status = 'aktif'
         WHERE id = ?
-      `, [hash, salt, app.admin_name, existingUsers[0].id]);
+      `, [adminUsername, app.admin_email, hash, salt, app.admin_name, existingUsers[0].id]);
     } else {
       await tenantConn.query(`
         INSERT INTO users (username, password, salt, role, nama, email, status)
