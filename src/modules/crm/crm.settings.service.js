@@ -3,6 +3,76 @@
 const crypto = require('crypto');
 const { pool } = require('../../config/database');
 const { syncStudentCurrentState } = require('./student.projection');
+const { sendGmailAPI } = require('../../utils/mailer');
+
+/**
+ * Helper: kirim notifikasi pembayaran formulir ke admin/manager tenant
+ */
+async function _notifyAdminPayment({ namaSiswa, namaSekolah, nominal, paymentMethod, cro, brandName, actor }) {
+  try {
+    const [adminRows] = await pool.query(
+      `SELECT email, nama FROM users WHERE LOWER(role) IN ('admin','manager') AND LOWER(status) = 'aktif' AND email IS NOT NULL AND email != '' LIMIT 3`
+    );
+    if (!adminRows.length) return;
+
+    const toAddresses = adminRows.map(r => r.email).join(', ');
+    const amountFmt   = `Rp ${Number(nominal).toLocaleString('id-ID')}`;
+    const brand       = brandName || 'NexaMOS CRM';
+    const verifiedBy  = actor || 'Admin';
+
+    await sendGmailAPI({
+      from: `"${brand} CRM Notification"`,
+      to: toAddresses,
+      subject: `💰 Registration Payment Confirmed — ${namaSiswa}`,
+      html: `
+        <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
+          <div style="text-align: center; margin-bottom: 20px;">
+            <h2 style="color: #04080f; margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.5px;">Nexa<span style="color:#00d68f;">MOS</span></h2>
+            <p style="color: #64748b; font-size: 12px; margin-top: 4px;">CRM Event Notification</p>
+          </div>
+          <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-left: 4px solid #16a34a; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+            <p style="margin: 0 0 6px; font-size: 14px; font-weight: 700; color: #0f172a;">✅ Registration Fee Payment Confirmed</p>
+            <p style="margin: 0; font-size: 13px; color: #334155;">A student's registration form payment has been verified and their status has been updated to <strong>Registered Opportunity</strong>.</p>
+          </div>
+          <table style="width:100%; border-collapse: collapse; font-size: 13.5px;">
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; color: #64748b; width: 40%;">Student Name</td>
+              <td style="padding: 8px 0; font-weight: 700; color: #0f172a;">${namaSiswa}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; color: #64748b;">School</td>
+              <td style="padding: 8px 0; color: #1e293b;">${namaSekolah || '&mdash;'}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; color: #64748b;">Registration Fee</td>
+              <td style="padding: 8px 0; font-weight: 700; color: #16a34a; font-size: 15px;">${amountFmt}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; color: #64748b;">Payment Method</td>
+              <td style="padding: 8px 0; color: #1e293b;">${paymentMethod || '&mdash;'}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; color: #64748b;">Assigned CRO</td>
+              <td style="padding: 8px 0; color: #1e293b;">${cro || '&mdash;'}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; color: #64748b;">New Status</td>
+              <td style="padding: 8px 0;"><span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:12px;font-weight:700;font-size:12px;">Registered Opportunity</span></td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #64748b;">Verified By</td>
+              <td style="padding: 8px 0; color: #1e293b;">${verifiedBy}</td>
+            </tr>
+          </table>
+          <p style="font-size: 12px; color: #94a3b8; margin-top: 24px; text-align: center;">&copy; ${new Date().getFullYear()} ${brand} &middot; Automated CRM Event Notification</p>
+        </div>
+      `,
+    });
+    console.log(`[Settings] Payment notification sent to admin(s): ${toAddresses}`);
+  } catch (emailErr) {
+    console.warn('[Settings] Failed to send admin payment notification:', emailErr.message);
+  }
+}
 
 /**
  * Catat event immutable ke events_log untuk CQRS & Audit Trail
@@ -496,7 +566,7 @@ async function verifyPaymentRegistration(token, data = {}, actor = 'Admin') {
     // 6. Sinkronisasi Read-Model Projection (student_current_state)
     await syncStudentCurrentState(conn, [idSiswa]);
 
-    return {
+    const result = {
       token,
       id_siswa: idSiswa,
       nama_siswa: tokenRecord.nama_lengkap,
@@ -505,6 +575,18 @@ async function verifyPaymentRegistration(token, data = {}, actor = 'Admin') {
       nominal,
       verified_by: actor
     };
+
+    // 7. Notifikasi email ke admin/manager tenant
+    _notifyAdminPayment({
+      namaSiswa: tokenRecord.nama_lengkap,
+      namaSekolah: idSekolahNama,
+      nominal,
+      paymentMethod,
+      cro,
+      actor,
+    });
+
+    return result;
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -696,6 +778,20 @@ async function manualVerifySiswaPayment(idSiswa, data = {}, actor = 'Admin') {
     await conn.commit();
 
     await syncStudentCurrentState(conn, [idSiswa]);
+
+    // Notifikasi email ke admin/manager tenant
+    const [siswaRow] = await pool.query(
+      'SELECT nama_lengkap FROM master_siswa WHERE id_siswa = ? LIMIT 1',
+      [idSiswa]
+    );
+    _notifyAdminPayment({
+      namaSiswa: siswaRow[0]?.nama_lengkap || idSiswa,
+      namaSekolah: idSekolahNama,
+      nominal,
+      paymentMethod,
+      cro,
+      actor,
+    });
 
     return {
       token,

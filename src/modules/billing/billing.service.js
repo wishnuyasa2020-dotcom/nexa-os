@@ -25,6 +25,8 @@
  */
 
 const { pool } = require('../../config/database');
+const { sendGmailAPI } = require('../../utils/mailer');
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Harga per pesan (IDR) — bisa di-override via environment variable
@@ -399,7 +401,60 @@ async function approveTopupRequest(requestId, action, processedBy, note) {
   );
 
   if (action === 'approved') {
-    return await topupCredit(req.tenant_id, req.amount, req.transfer_ref, processedBy);
+    const result = await topupCredit(req.tenant_id, req.amount, req.transfer_ref, processedBy);
+
+    // Send top-up confirmation email to tenant admin (non-blocking)
+    try {
+      const { mainPool } = require('../../config/database');
+      const [[betaApp]] = await mainPool.query(
+        `SELECT admin_email, admin_name, brand_name FROM beta_applications WHERE approved_tenant_id = ? LIMIT 1`,
+        [req.tenant_id]
+      );
+      const adminEmail = betaApp?.admin_email;
+      const adminName  = betaApp?.admin_name || 'Admin';
+      const brandName  = betaApp?.brand_name || req.tenant_id;
+
+      if (adminEmail) {
+        const amountFormatted = `Rp ${Number(req.amount).toLocaleString('id-ID')}`;
+        const newBalFmt = `Rp ${Number(result.newBalance).toLocaleString('id-ID')}`;
+
+        sendGmailAPI({
+          from: '"NexaMOS Billing"',
+          to: adminEmail,
+          subject: `✅ Meta WA Credit Top-Up Confirmed — ${amountFormatted} Added to Your Balance`,
+          html: `
+            <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
+              <div style="text-align: center; margin-bottom: 24px;">
+                <h2 style="color: #04080f; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">Nexa<span style="color:#00d68f;">MOS</span></h2>
+                <p style="color: #64748b; font-size: 13px; margin-top: 4px;">Billing &amp; Credit Management</p>
+              </div>
+              <p style="font-size: 15px; line-height: 1.6;">Hi <strong>${adminName}</strong>,</p>
+              <p style="font-size: 14px; line-height: 1.6; color: #334155;">Your Meta WhatsApp messaging credit top-up for <strong>${brandName}</strong> has been verified and successfully added to your balance. Your outbound messaging is now active.</p>
+              <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-left: 4px solid #00d68f; border-radius: 8px; padding: 18px; margin: 24px 0;">
+                <p style="margin: 0 0 10px; font-size: 13.5px; font-weight: 700; color: #0f172a;">Top-Up Receipt:</p>
+                <p style="margin: 6px 0; font-size: 13.5px;"><strong>Amount Added:</strong> <span style="color: #16a34a; font-weight: 700; font-size: 15px;">${amountFormatted}</span></p>
+                <p style="margin: 6px 0; font-size: 13.5px;"><strong>Current Balance:</strong> ${newBalFmt}</p>
+                <p style="margin: 6px 0; font-size: 13.5px;"><strong>Reference:</strong> <code style="background:#e2e8f0;padding:2px 6px;border-radius:4px;">${req.transfer_ref || '-'}</code></p>
+                <p style="margin: 6px 0; font-size: 13.5px;"><strong>Approved By:</strong> ${processedBy || 'Admin'}</p>
+              </div>
+              <div style="background-color: #fffbeb; border: 1px solid #fef3c7; border-radius: 8px; padding: 14px; margin-bottom: 24px;">
+                <p style="margin: 0; font-size: 12.5px; color: #92400e; line-height: 1.5;"><strong>⚠ Rate Reminder:</strong> Marketing messages: Rp 1,250 | Utility: Rp 600 | Authentication: Rp 600 | Service (SW Open): <strong>FREE</strong></p>
+              </div>
+              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0 16px;" />
+              <p style="font-size: 11.5px; color: #94a3b8; text-align: center; margin: 0;">&copy; 2026 NexaMOS Billing &middot; All rights reserved.</p>
+            </div>
+          `,
+        }).then(() => {
+          console.log(`[Billing] Top-up confirmation email sent via Gmail API to ${adminEmail}`);
+        }).catch(e => {
+          console.warn('[Billing] Failed to send top-up email:', e.message);
+        });
+      }
+    } catch (emailErr) {
+      console.warn('[Billing] Error sending top-up email:', emailErr.message);
+    }
+
+    return result;
   }
 
   return { success: true, action: 'rejected' };

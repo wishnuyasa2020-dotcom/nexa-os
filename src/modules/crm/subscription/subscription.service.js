@@ -3,6 +3,8 @@
 const axios = require('axios');
 const crypto = require('crypto');
 const { mainPool, pool } = require('../../../config/database');
+const { sendGmailAPI } = require('../../../utils/mailer');
+
 
 /**
  * Matriks Paket & Harga Nexa CRM SaaS (Pedoman Tier & Feature Classification)
@@ -438,6 +440,63 @@ async function processPaymentSuccess({ invoiceId, paymentType, midtransData }) {
   );
 
   console.log(`[AutoUpgrade Success] Tenant '${tenantId}' berhasil di-upgrade ke Tier ${tierKey} (${cycleKey} - ${periodDays} Hari).`);
+
+  // Send tier upgrade confirmation email to tenant admin
+  try {
+    const [[betaApp]] = await mainPool.query(
+      `SELECT admin_email, admin_name, brand_name FROM beta_applications WHERE approved_tenant_id = ? LIMIT 1`,
+      [tenantId]
+    );
+    const adminEmail = betaApp?.admin_email;
+    const adminName  = betaApp?.admin_name || 'Admin';
+    const brandName  = betaApp?.brand_name || tenantId;
+
+    if (adminEmail) {
+      const loginUrl    = process.env.FRONTEND_URL ? `${process.env.FRONTEND_URL}/login` : 'https://crm.nexamos.cloud/login';
+      const tierLabels  = { PRO: 'Pro', BUSINESS: 'Business', ENTERPRISE: 'Enterprise' };
+      const cycleLabels = { MONTHLY: 'Monthly', YEARLY: 'Annual' };
+      const periodLabel = cycleLabels[cycleKey] || cycleKey;
+      const tierLabel   = tierLabels[tierKey] || tierKey;
+      const periodEnd   = new Date(Date.now() + periodDays * 86400000).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+      sendGmailAPI({
+        from: '"NexaMOS Billing"',
+        to: adminEmail,
+        subject: `🚀 Plan Upgrade Confirmed — You're now on ${tierLabel} (${periodLabel})`,
+        html: `
+          <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
+            <div style="text-align: center; margin-bottom: 24px;">
+              <h2 style="color: #04080f; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">Nexa<span style="color:#00d68f;">MOS</span></h2>
+              <p style="color: #64748b; font-size: 13px; margin-top: 4px;">Billing &amp; Subscription</p>
+            </div>
+            <p style="font-size: 15px; line-height: 1.6;">Hi <strong>${adminName}</strong>,</p>
+            <p style="font-size: 14px; line-height: 1.6; color: #334155;">Your payment has been verified and your NexaMOS CRM workspace for <strong>${brandName}</strong> has been successfully upgraded. 🎉</p>
+            <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-left: 4px solid #00d68f; border-radius: 8px; padding: 18px; margin: 24px 0;">
+              <p style="margin: 0 0 10px; font-size: 13.5px; font-weight: 700; color: #0f172a;">Upgrade Summary:</p>
+              <p style="margin: 6px 0; font-size: 13.5px;"><strong>Organization:</strong> ${brandName}</p>
+              <p style="margin: 6px 0; font-size: 13.5px;"><strong>New Plan:</strong> <span style="background:#00d68f;color:#04080f;padding:2px 8px;border-radius:12px;font-weight:700;font-size:12px;">${tierLabel} &mdash; ${periodLabel}</span></p>
+              <p style="margin: 6px 0; font-size: 13.5px;"><strong>Active Until:</strong> ${periodEnd}</p>
+              <p style="margin: 6px 0; font-size: 13.5px;"><strong>Contact Limit:</strong> ${limits.limit_siswa.toLocaleString()} contacts / ${limits.limit_sekolah} schools</p>
+              <p style="margin: 6px 0; font-size: 13.5px;"><strong>Team Seats:</strong> ${roles.max_cro} CRO &bull; ${roles.max_chief_cro} Chief CRO &bull; ${roles.max_manager} Manager</p>
+            </div>
+            <div style="text-align: center; margin: 28px 0;">
+              <a href="${loginUrl}" style="display: inline-block; background-color: #00d68f; color: #04080f; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 15px;">Open My Dashboard &rarr;</a>
+            </div>
+            <p style="font-size: 12px; color: #64748b; line-height: 1.5;">Thank you for your trust in NexaMOS. For billing inquiries, please reach out to our support team.</p>
+            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0 16px;" />
+            <p style="font-size: 11.5px; color: #94a3b8; text-align: center; margin: 0;">&copy; 2026 NexaMOS Billing &middot; All rights reserved.</p>
+          </div>
+        `,
+      }).then(() => {
+        console.log(`[AutoUpgrade] Tier upgrade email sent via Gmail API to ${adminEmail}`);
+      }).catch(e => {
+        console.warn('[AutoUpgrade] Failed to send tier upgrade email:', e.message);
+      });
+    }
+  } catch (emailErr) {
+    console.warn('[AutoUpgrade] Error fetching tenant email for upgrade notification:', emailErr.message);
+  }
+
   return true;
 }
 
