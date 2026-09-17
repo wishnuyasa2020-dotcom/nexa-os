@@ -393,7 +393,7 @@ async function provisionNewTenant(payload) {
     await sendGmailAPI({
       from: '"NexaMOS Support"',
       to: adminEmail,
-      subject: `Welcome to NexaMOS CRM — Your Access Credentials for ${brand}`,
+      subject: `🎉 Your NexaMOS CRM Workspace is Ready — ${brand}`,
       html: `
         <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
           <div style="text-align: center; margin-bottom: 24px;">

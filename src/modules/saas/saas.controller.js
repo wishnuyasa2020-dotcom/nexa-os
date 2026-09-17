@@ -144,6 +144,26 @@ async function deletePool(req, res) {
 }
 
 /**
+ * POST /api/admin/db-pool/:id/release
+ * Endpoint Super Admin: Melepaskan kembali DB Pool orphaned ke status AVAILABLE
+ * (digunakan ketika tenant tes sudah dihapus manual dari DB tapi pool masih IN_USE)
+ */
+async function releasePool(req, res) {
+  try {
+    const { id } = req.params;
+    const result = await saasService.releasePoolDb(id);
+    return res.json({
+      status: 'ok',
+      message: `Database ${result.dbName} berhasil dibebaskan kembali ke pool (AVAILABLE). Tenant sebelumnya: ${result.previousTenantId || '-'}.`,
+      data: result,
+    });
+  } catch (err) {
+    console.error('[SaaS Controller] releasePool error:', err);
+    return res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+/**
  * GET /api/v1/saas/beta-status
  * Endpoint Publik: Mengecek status ketersediaan kuota Closed Beta
  */
@@ -282,6 +302,7 @@ module.exports = {
   getPoolOverview,
   addPool,
   deletePool,
+  releasePool,
   getBetaStatus,
   applyBeta,
   getBetaApplications,

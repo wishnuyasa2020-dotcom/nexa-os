@@ -57,9 +57,10 @@ router.get('/credits/:tenantId/transactions',                       billingAdmin
 
 // ── DB Pool Management (SaaS Engine) ─────────────────────────
 const saasCtrl = require('../saas/saas.controller');
-router.get('/db-pool',        saasCtrl.getPoolOverview);
-router.post('/db-pool',       saasCtrl.addPool);
-router.delete('/db-pool/:id', saasCtrl.deletePool);
+router.get('/db-pool',              saasCtrl.getPoolOverview);
+router.post('/db-pool',             saasCtrl.addPool);
+router.post('/db-pool/:id/release', saasCtrl.releasePool);   // Release orphaned IN_USE pool
+router.delete('/db-pool/:id',       saasCtrl.deletePool);
 
 // ── Closed Beta Applications Management (Superadmin) ─────────
 router.get('/beta-applications',              saasCtrl.getBetaApplications);

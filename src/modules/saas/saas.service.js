@@ -8,59 +8,8 @@
 
 const crypto = require('crypto');
 const mysql = require('mysql2/promise');
-const { google } = require('googleapis');
 const { pool, mainPool } = require('../../config/database');
-
-// ── Gmail API Mailer (HTTPS-based, tidak kena blokir Render) ─────────────────
-/**
- * Mengirim email via Gmail REST API menggunakan OAuth2.
- * Tidak menggunakan SMTP (port 587/465) sehingga aman di Render Free tier.
- * @returns {Promise<void>}
- */
-async function sendGmailAPI({ to, subject, html, from }) {
-  const clientId     = process.env.GMAIL_CLIENT_ID;
-  const clientSecret = process.env.GMAIL_CLIENT_SECRET;
-  const refreshToken = process.env.GMAIL_REFRESH_TOKEN;
-  const senderEmail  = process.env.GMAIL_SENDER || process.env.SMTP_USER;
-
-  console.log(`[Gmail API] clientId=${clientId ? 'SET' : 'NOT_SET'} | refreshToken=${refreshToken ? 'SET' : 'NOT_SET'} | sender=${senderEmail || 'NOT_SET'}`);
-
-  if (!clientId || !clientSecret || !refreshToken || !senderEmail) {
-    throw new Error('Gmail API credentials belum lengkap di environment variables.');
-  }
-
-  const oauth2Client = new google.auth.OAuth2(
-    clientId,
-    clientSecret,
-    'https://developers.google.com/oauthplayground'
-  );
-
-  oauth2Client.setCredentials({ refresh_token: refreshToken });
-
-  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-  const fromLabel = from || '"Nexa MOS Onboarding Team"';
-  const rawMessage = [
-    `From: ${fromLabel} <${senderEmail}>`,
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    `MIME-Version: 1.0`,
-    `Content-Type: text/html; charset=UTF-8`,
-    ``,
-    html,
-  ].join('\n');
-
-  const encoded = Buffer.from(rawMessage)
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-
-  await gmail.users.messages.send({
-    userId: 'me',
-    requestBody: { raw: encoded },
-  });
-}
+const { sendGmailAPI } = require('../../utils/mailer');
 
 
 // ── Token Helper (Kompatibel dengan Nexa Auth) ───────────────────────────────
@@ -210,6 +159,52 @@ async function removeDatabaseFromPool(id) {
 
   await mainPool.query('DELETE FROM db_pools WHERE id = ?', [id]);
   return { id, dbName: existing[0].db_name, deleted: true };
+}
+
+/**
+ * Melepaskan kembali DB Pool yang orphaned (tenant sudah dihapus tapi slot masih IN_USE)
+ * Superadmin Only — digunakan untuk bersihkan sisa tes onboarding.
+ */
+async function releasePoolDb(id) {
+  if (!mainPool) throw new Error('Main DB pool tidak terhubung.');
+
+  const [existing] = await mainPool.query(
+    'SELECT id, status, db_name, assigned_tenant_id FROM db_pools WHERE id = ?',
+    [id]
+  );
+  if (existing.length === 0) throw new Error('Database pool tidak ditemukan.');
+
+  const pool = existing[0];
+
+  if (pool.status !== 'IN_USE') {
+    throw new Error(`Database ${pool.db_name} sudah berstatus ${pool.status}. Tidak perlu direset.`);
+  }
+
+  // Pastikan tenant yang di-assign memang sudah tidak ada
+  if (pool.assigned_tenant_id) {
+    const [tenantCheck] = await mainPool.query(
+      'SELECT tenant_id FROM tenants WHERE tenant_id = ?',
+      [pool.assigned_tenant_id]
+    );
+    if (tenantCheck.length > 0) {
+      throw new Error(
+        `Tenant ${pool.assigned_tenant_id} masih aktif di tabel tenants. ` +
+        `Tidak boleh melepaskan pool yang masih terkait tenant aktif.`
+      );
+    }
+  }
+
+  await mainPool.query(
+    `UPDATE db_pools SET status = 'AVAILABLE', assigned_tenant_id = NULL, assigned_at = NULL, updated_at = NOW() WHERE id = ?`,
+    [id]
+  );
+
+  return {
+    id,
+    dbName: pool.db_name,
+    previousTenantId: pool.assigned_tenant_id,
+    status: 'AVAILABLE',
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -454,18 +449,18 @@ async function registerTenantSelfService({ brand_name, admin_name, admin_email, 
   const loginUrl = process.env.FRONTEND_LOGIN_URL || (process.env.FRONTEND_URL ? `${process.env.FRONTEND_URL}/login` : 'https://crm.nexamos.cloud/login');
 
   sendGmailAPI({
-    from: '"Nexa OS Support"',
+    from: '"NexaMOS Support"',
     to: email,
-    subject: `Konfirmasi Pendaftaran Nexa CRM — Kredensial Akses ${brand}`,
+    subject: `Konfirmasi Pendaftaran NexaMOS CRM — Kredensial Akses ${brand}`,
     html: `
       <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; color: #1e293b;">
         <div style="text-align: center; margin-bottom: 24px;">
           <div style="display: inline-block; background: linear-gradient(135deg, #00d68f, #00b87a); color: #04080f; font-weight: 900; font-size: 22px; width: 44px; height: 44px; line-height: 44px; border-radius: 10px; margin-bottom: 8px;">N</div>
-          <h2 style="color: #0f172a; margin: 0; font-size: 22px;">Konfirmasi Akun Nexa CRM</h2>
+          <h2 style="color: #0f172a; margin: 0; font-size: 22px;">Konfirmasi Akun NexaMOS CRM</h2>
           <p style="color: #64748b; margin: 4px 0 0; font-size: 14px;">CRM Berbasis Bukti untuk Lembaga Pendidikan &amp; Vokasi</p>
         </div>
         <p style="font-size: 15px;">Halo <strong>${adminDisplayName}</strong>,</p>
-        <p style="font-size: 14px; line-height: 1.6;">Terima kasih telah mendaftarkan <strong>${brand}</strong> di platform Nexa OS. Sistem database mandiri dan akun Super Admin Anda telah berhasil disiapkan.</p>
+        <p style="font-size: 14px; line-height: 1.6;">Terima kasih telah mendaftarkan <strong>${brand}</strong> di platform NexaMOS CRM. Sistem database mandiri dan akun Super Admin Anda telah berhasil disiapkan.</p>
         <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #00d68f; padding: 16px; border-radius: 6px; margin: 20px 0;">
           <h4 style="margin: 0 0 12px; color: #0f172a; font-size: 13.5px; text-transform: uppercase; letter-spacing: 0.05em;">Kredensial Login Super Admin</h4>
           <p style="margin: 6px 0; font-size: 13.5px;"><strong>URL Login:</strong> <a href="${loginUrl}" style="color: #2563eb; text-decoration: none; font-weight: 600;">${loginUrl}</a></p>
@@ -478,7 +473,7 @@ async function registerTenantSelfService({ brand_name, admin_name, admin_email, 
           <a href="${loginUrl}" style="display: inline-block; background-color: #00d68f; color: #04080f; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 15px;">Masuk ke Dashboard CRM &rarr;</a>
         </div>
         <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0 16px;" />
-        <p style="font-size: 11.5px; color: #94a3b8; text-align: center; margin: 0;">Email ini dikirim secara otomatis oleh Nexa OS SaaS Engine &middot; &copy; 2026 Nexa OS. All rights reserved.</p>
+        <p style="font-size: 11.5px; color: #94a3b8; text-align: center; margin: 0;">Email ini dikirim secara otomatis oleh NexaMOS SaaS Engine &middot; &copy; 2026 NexaMOS. All rights reserved.</p>
       </div>
     `,
   }).then(() => {
@@ -486,6 +481,7 @@ async function registerTenantSelfService({ brand_name, admin_name, admin_email, 
   }).catch(mailErr => {
     console.warn('[SaaS Onboarding] Gagal kirim welcome email via Gmail API:', mailErr.message);
   });
+
 
   return {
     tenantId,
@@ -1047,5 +1043,6 @@ module.exports = {
   listBetaApplications,
   approveBetaApplication,
   updateBetaApplicationStatus,
+  releasePoolDb,
 };
 
