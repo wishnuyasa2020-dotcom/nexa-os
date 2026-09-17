@@ -15,7 +15,11 @@ const { pool, mainPool } = require('../../config/database');
 function getEmailTransporter() {
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
-  if (!user || !pass) return null;
+  console.log(`[SMTP Debug] SMTP_USER=${user ? user : 'NOT_SET'} | SMTP_PASS=${pass ? '***' + pass.slice(-4) : 'NOT_SET'} | SMTP_HOST=${process.env.SMTP_HOST || 'default:smtp.gmail.com'}`);
+  if (!user || !pass) {
+    console.warn('[SMTP Debug] Transporter TIDAK dibuat — SMTP_USER atau SMTP_PASS kosong!');
+    return null;
+  }
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
     port: parseInt(process.env.SMTP_PORT || '587', 10),
