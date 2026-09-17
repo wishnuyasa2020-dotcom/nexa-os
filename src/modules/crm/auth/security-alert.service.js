@@ -1,5 +1,5 @@
-'use strict';
-
+const crypto = require('crypto');
+const { pool, tenantStorage } = require('../../../config/database');
 const { sendGmailAPI } = require('../../../utils/mailer');
 
 
@@ -88,7 +88,7 @@ async function notifyCredentialChange({
   const adminRecipients = [];
   try {
     const [admins] = await activePool.query(
-      "SELECT email, nama, username FROM users WHERE LOWER(role) = 'admin' AND status = 'Aktif' AND email IS NOT NULL AND email != ''"
+      "SELECT email, nama, username FROM users WHERE (LOWER(role) = 'admin' OR LOWER(role) = 'super admin') AND LOWER(status) = 'aktif' AND email IS NOT NULL AND email != ''"
     );
     for (const a of admins) {
       if (a.email && a.email.includes('@') && !adminRecipients.includes(a.email.trim())) {
