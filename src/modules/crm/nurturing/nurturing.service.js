@@ -10,7 +10,7 @@ const { pool } = require('../../../config/database');
 const axios = require('axios');
 const crypto = require('crypto');
 const { syncStudentCurrentState } = require('../student.projection');
-const { normalizeLifecycleState } = require('../lifecycle.constants');
+const { normalizeLifecycleState } = require('../../../config/lifecycle.constants');
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 

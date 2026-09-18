@@ -16,7 +16,7 @@
 
 const { pool } = require('../../../config/database');
 const { v4: uuidv4 } = require('uuid');
-const { normalizeLifecycleState } = require('../lifecycle.constants');
+const { normalizeLifecycleState } = require('../../../config/lifecycle.constants');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers

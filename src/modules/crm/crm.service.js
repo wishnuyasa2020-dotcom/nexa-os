@@ -1,7 +1,7 @@
 'use strict';
 
 const { pool } = require('../../config/database');
-const { normalizeLifecycleState } = require('./lifecycle.constants');
+const { normalizeLifecycleState } = require('../../config/lifecycle.constants');
 
 /**
  * Nexa OS — CRM Service
