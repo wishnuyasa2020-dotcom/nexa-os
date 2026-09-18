@@ -97,11 +97,12 @@ async function changePassword(req, res) {
     }
 
     const actor = req.user?.nama || req.user?.username;
+    const tenantId = req.user?.tenant_id || req.user?.tenantId || null;
     const reqMeta = {
       ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress || req.ip,
       userAgent: req.headers['user-agent']
     };
-    const result = await authService.changePassword(req.user.username, old_password, new_password, actor, reqMeta);
+    const result = await authService.changePassword(req.user.username, old_password, new_password, actor, reqMeta, tenantId);
     if (!result.success) {
       return res.status(400).json({ status: 'error', message: result.message });
     }

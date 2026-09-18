@@ -254,12 +254,14 @@ async function forgotPassword(email) {
   const cleanEmail = String(email).trim();
   let targetUser = null;
   let targetPool = pool;
+  let targetTenantId = 'crm-demo';
 
   // 1. Cek di default pool
   const [[user]] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [cleanEmail]);
   if (user) {
     targetUser = user;
     targetPool = pool;
+    targetTenantId = 'crm-demo';
   } else {
     // 2. Cek lintas tenant
     const { mainPool, getDynamicPool } = require('../../../config/database');
@@ -274,6 +276,7 @@ async function forgotPassword(email) {
           if (found) {
             targetUser = found;
             targetPool = tPool;
+            targetTenantId = t.tenant_id;
             break;
           }
         } catch (_) {}
@@ -284,6 +287,18 @@ async function forgotPassword(email) {
   if (!targetUser) {
     // Return success to prevent email enumeration attack
     return { success: true, message: 'Jika email terdaftar, instruksi reset password telah dikirimkan.' };
+  }
+
+  // HARD GUARD: Cegah reset password untuk akun demo (demo.nexamos.cloud)
+  if (
+    targetTenantId === 'crm-demo' ||
+    String(targetTenantId || '').toLowerCase().includes('demo') ||
+    String(targetUser.username || '').toLowerCase() === 'admin'
+  ) {
+    return {
+      success: false,
+      message: 'Fitur reset password dinonaktifkan untuk akun demo demi menjaga ketersediaan akses bersama.'
+    };
   }
 
   // Buat token 64 hex characters
@@ -357,6 +372,7 @@ async function resetPassword(token, newPassword) {
   let targetPool = pool;
 
   // 1. Cek di default pool
+  let targetTenantId = 'crm-demo';
   const [[user]] = await pool.query(
     'SELECT * FROM users WHERE reset_password_token = ? LIMIT 1',
     [token]
@@ -365,6 +381,7 @@ async function resetPassword(token, newPassword) {
   if (user) {
     targetUser = user;
     targetPool = pool;
+    targetTenantId = 'crm-demo';
   } else {
     // 2. Cek lintas tenant
     const { mainPool, getDynamicPool } = require('../../../config/database');
@@ -379,6 +396,7 @@ async function resetPassword(token, newPassword) {
           if (found) {
             targetUser = found;
             targetPool = tPool;
+            targetTenantId = t.tenant_id;
             break;
           }
         } catch (_) {}
@@ -388,6 +406,18 @@ async function resetPassword(token, newPassword) {
 
   if (!targetUser) {
     return { success: false, message: 'Token tidak valid atau sudah tidak berlaku.' };
+  }
+
+  // HARD GUARD: Cegah reset password untuk akun demo (demo.nexamos.cloud)
+  if (
+    targetTenantId === 'crm-demo' ||
+    String(targetTenantId || '').toLowerCase().includes('demo') ||
+    String(targetUser.username || '').toLowerCase() === 'admin'
+  ) {
+    return {
+      success: false,
+      message: 'Fitur reset password dinonaktifkan untuk akun demo demi menjaga ketersediaan akses bersama.'
+    };
   }
 
   if (Date.now() > Number(targetUser.reset_password_expires)) {
@@ -499,6 +529,17 @@ async function updateProfile(currentUsername, data = {}, actor = null, reqMeta =
   if (data.username && String(data.username).trim() !== '') {
     const cleanUsername = String(data.username).trim().toLowerCase();
     if (cleanUsername !== user.username.toLowerCase()) {
+      // HARD GUARD: Cegah perubahan username untuk akun demo
+      if (
+        user.username.toLowerCase() === 'admin' ||
+        (process.env.DB_NAME || 'u294320793_crmdemo').toLowerCase().includes('demo')
+      ) {
+        return {
+          success: false,
+          message: 'Perubahan username dinonaktifkan pada akun demo demi menjaga ketersediaan akses bersama.'
+        };
+      }
+
       const [[dupUser]] = await pool.query(
         'SELECT id FROM users WHERE username = ? AND id != ? LIMIT 1',
         [cleanUsername, user.id]
@@ -568,7 +609,20 @@ async function updateProfile(currentUsername, data = {}, actor = null, reqMeta =
   return { success: true, message: 'Profil berhasil diperbarui.', user: updatedUser, usernameChanged: isUsernameChanged };
 }
 
-async function changePassword(username, oldPassword, newPassword, actor = null, reqMeta = {}) {
+async function changePassword(username, oldPassword, newPassword, actor = null, reqMeta = {}, tenantId = null) {
+  // HARD GUARD: Cegah pergantian password untuk akun demo
+  const isDemoAccount =
+    tenantId === 'crm-demo' ||
+    String(tenantId || '').toLowerCase().includes('demo') ||
+    (String(username).toLowerCase() === 'admin' && (!tenantId || tenantId === 'crm-demo'));
+
+  if (isDemoAccount) {
+    return {
+      success: false,
+      message: 'Perubahan password dinonaktifkan untuk akun demo demi menjaga ketersediaan akses bersama.'
+    };
+  }
+
   const [[user]] = await pool.query(
     'SELECT id, username, nama, password, salt, role FROM users WHERE username = ? LIMIT 1',
     [username]
