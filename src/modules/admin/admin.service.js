@@ -5,6 +5,7 @@ const mysql = require('mysql2/promise');
 const axios = require('axios');
 const { pool, mainPool } = require('../../config/database');
 const { sendGmailAPI } = require('../../utils/mailer');
+const { DEFAULT_TEMPLATES_LIBRARY } = require('./defaultTemplates.data');
 
 
 /**
@@ -724,13 +725,15 @@ async function getTemplatesByTenant(tenantId) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Memastikan tabel template_library di DB nexamain sudah ada dan terisi 27 template ontologi
+ * Memastikan tabel template_library di DB nexamain sudah ada, memiliki kolom target_type,
+ * dan terisi template ontologi master (LPK & General)
  */
 async function ensureTemplateLibrary(forceRefresh = false) {
   await mainPool.query(`
     CREATE TABLE IF NOT EXISTS template_library (
       id_template VARCHAR(50) NOT NULL PRIMARY KEY,
       pipeline VARCHAR(50) NOT NULL,
+      target_type ENUM('lpk', 'general', 'all') NOT NULL DEFAULT 'lpk',
       nama_template VARCHAR(150) NOT NULL,
       template_name_api VARCHAR(100) NOT NULL,
       language_code VARCHAR(10) DEFAULT 'id',
@@ -748,16 +751,27 @@ async function ensureTemplateLibrary(forceRefresh = false) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
   `);
 
+  // Pastikan kolom target_type sudah ada di tabel template_library
+  try {
+    const [cols] = await mainPool.query("SHOW COLUMNS FROM template_library LIKE 'target_type'");
+    if (cols.length === 0) {
+      await mainPool.query("ALTER TABLE template_library ADD COLUMN target_type ENUM('lpk', 'general', 'all') NOT NULL DEFAULT 'lpk' AFTER pipeline");
+    }
+  } catch (eCol) {
+    console.warn('[Template Library] Check column target_type:', eCol.message);
+  }
+
   const [countRows] = await mainPool.query('SELECT COUNT(*) as cnt FROM template_library');
-  if (countRows[0].cnt === 0 || forceRefresh) {
+  if (countRows[0].cnt === 0 || forceRefresh || countRows[0].cnt < DEFAULT_TEMPLATES_LIBRARY.length) {
     for (const tpl of DEFAULT_TEMPLATES_LIBRARY) {
       await mainPool.query(`
         INSERT INTO template_library
-          (id_template, pipeline, nama_template, template_name_api, language_code,
+          (id_template, pipeline, target_type, nama_template, template_name_api, language_code,
            body_text, meta_buttons, parameters, kategori, urutan, status_crm, meta_status, header_type, header_url)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
           pipeline = VALUES(pipeline),
+          target_type = VALUES(target_type),
           nama_template = VALUES(nama_template),
           template_name_api = VALUES(template_name_api),
           body_text = VALUES(body_text),
@@ -768,7 +782,7 @@ async function ensureTemplateLibrary(forceRefresh = false) {
           status_crm = VALUES(status_crm),
           meta_status = VALUES(meta_status)
       `, [
-        tpl.id_template, tpl.pipeline, tpl.nama_template, tpl.template_name_api, tpl.language_code || 'id',
+        tpl.id_template, tpl.pipeline, tpl.target_type || 'lpk', tpl.nama_template, tpl.template_name_api, tpl.language_code || 'id',
         tpl.body_text, tpl.meta_buttons || null, tpl.parameters || null, tpl.kategori || null,
         tpl.urutan || 1, tpl.status_crm || 'INACTIVE', tpl.meta_status || 'DELETED',
         tpl.header_type || null, tpl.header_url || null
@@ -780,15 +794,31 @@ async function ensureTemplateLibrary(forceRefresh = false) {
 
 /**
  * GET /api/admin/templates/library
- * Mengambil semua 27 template master beserta statistik kategori & daftar tenant
+ * Mengambil template master berdasar target_type ('lpk' | 'general' | 'ALL') beserta statistik & daftar tenant
  */
-async function getTemplateLibrary() {
+async function getTemplateLibrary(targetType) {
   await ensureTemplateLibrary();
 
-  const [templates] = await mainPool.query(
-    'SELECT * FROM template_library ORDER BY urutan ASC, id_template ASC'
-  );
+  let target = null;
+  if (typeof targetType === 'string') {
+    target = targetType.trim();
+  } else if (targetType && typeof targetType === 'object') {
+    target = targetType.type || targetType.target_type || null;
+  }
 
+  let sql = 'SELECT * FROM template_library';
+  const params = [];
+  if (target && target.toUpperCase() !== 'ALL') {
+    sql += ' WHERE target_type = ? OR target_type = "all"';
+    params.push(target.toLowerCase());
+  }
+  sql += ' ORDER BY urutan ASC, id_template ASC';
+
+  const [templates] = await mainPool.query(sql, params);
+
+  // Ambil data statistik dari seluruh katalog template di DB
+  const [allTemplates] = await mainPool.query('SELECT pipeline, target_type FROM template_library');
+  
   const pipelineStats = {
     AUDIENCE: 0,
     KNOWN_PROFILE: 0,
@@ -803,6 +833,18 @@ async function getTemplateLibrary() {
     TOTAL: templates.length
   };
 
+  const targetTypeStats = {
+    lpk: 0,
+    general: 0,
+    all: 0,
+    total: allTemplates.length
+  };
+
+  allTemplates.forEach(t => {
+    const tt = (t.target_type || 'lpk').toLowerCase();
+    if (targetTypeStats[tt] !== undefined) targetTypeStats[tt]++;
+  });
+
   templates.forEach(t => {
     let p = (t.pipeline || '').toUpperCase().trim();
     if (p === 'REGISTERED_OPPORTUNITY') p = 'REGISTERED';
@@ -813,12 +855,13 @@ async function getTemplateLibrary() {
   pipelineStats.REGISTERED_OPPORTUNITY = pipelineStats.REGISTERED;
 
   const [tenants] = await mainPool.query(
-    `SELECT tenant_id, brand_name, tier, status FROM tenants WHERE status = 'ACTIVE' ORDER BY brand_name ASC`
+    `SELECT tenant_id, brand_name, tier, tenant_type, status FROM tenants WHERE status = 'ACTIVE' ORDER BY brand_name ASC`
   );
 
   return {
     templates,
     pipelineStats,
+    targetTypeStats,
     tenants
   };
 }
@@ -832,13 +875,14 @@ async function getTenantPreviewContext(tenantId) {
     return {
       tenantId: 'default',
       brandName: 'NexaMOS Pilot',
+      tenantType: 'lpk',
       sampleStudent: 'Fakhri Khaerul Qolbi',
       sampleSchool: 'SMK Negeri 1 Surabaya'
     };
   }
 
   const [tRows] = await mainPool.query(
-    `SELECT t.tenant_id, t.brand_name, td.db_host, td.db_port, td.db_name, td.db_user, td.db_password
+    `SELECT t.tenant_id, t.brand_name, t.tenant_type, td.db_host, td.db_port, td.db_name, td.db_user, td.db_password
      FROM tenants t
      JOIN tenant_databases td ON t.tenant_id = td.tenant_id
      WHERE t.tenant_id = ? LIMIT 1`,
@@ -849,14 +893,16 @@ async function getTenantPreviewContext(tenantId) {
     return {
       tenantId,
       brandName: tenantId,
+      tenantType: 'lpk',
       sampleStudent: 'Ahmad Rizki',
       sampleSchool: 'SMA Negeri 1'
     };
   }
 
   const t = tRows[0];
-  let sampleStudent = 'Ahmad Rizki';
-  let sampleSchool = 'SMA Negeri 1';
+  const isGeneral = (t.tenant_type || '').toLowerCase() === 'general';
+  let sampleStudent = isGeneral ? 'Budi Pratama' : 'Ahmad Rizki';
+  let sampleSchool = isGeneral ? 'PT Maju Bersama' : 'SMA Negeri 1';
 
   try {
     const conn = await mysql.createConnection({
@@ -872,11 +918,13 @@ async function getTenantPreviewContext(tenantId) {
       sampleStudent = siswaRows[0].nama_lengkap;
     }
 
-    const [sekolahRows] = await conn.query(
-      `SELECT nama_sekolah FROM master_sekolah WHERE nama_sekolah IS NOT NULL AND nama_sekolah != '' LIMIT 1`
-    );
-    if (sekolahRows.length > 0 && sekolahRows[0].nama_sekolah) {
-      sampleSchool = sekolahRows[0].nama_sekolah;
+    if (!isGeneral) {
+      const [sekolahRows] = await conn.query(
+        `SELECT nama_sekolah FROM master_sekolah WHERE nama_sekolah IS NOT NULL AND nama_sekolah != '' LIMIT 1`
+      );
+      if (sekolahRows.length > 0 && sekolahRows[0].nama_sekolah) {
+        sampleSchool = sekolahRows[0].nama_sekolah;
+      }
     }
 
     await conn.end();
@@ -887,6 +935,7 @@ async function getTenantPreviewContext(tenantId) {
   return {
     tenantId: t.tenant_id,
     brandName: t.brand_name || t.tenant_id,
+    tenantType: t.tenant_type || 'lpk',
     sampleStudent,
     sampleSchool
   };
@@ -894,13 +943,14 @@ async function getTenantPreviewContext(tenantId) {
 
 /**
  * POST /api/admin/templates/library/deploy/:tenantId
- * Menyalin 27 template default ke tabel wa_templates database tenant dengan mengganti {{tenant_name}}
+ * Menyalin template pustaka master yang sesuai dengan klasifikasi tenant (LPK vs General)
+ * ke tabel wa_templates database tenant dengan mengganti placeholder {{tenant_name}}
  */
 async function deployLibraryToTenant(tenantId) {
   await ensureTemplateLibrary();
 
   const [tRows] = await mainPool.query(
-    `SELECT t.tenant_id, t.brand_name, td.db_host, td.db_port, td.db_name, td.db_user, td.db_password
+    `SELECT t.tenant_id, t.brand_name, t.tenant_type, td.db_host, td.db_port, td.db_name, td.db_user, td.db_password
      FROM tenants t
      JOIN tenant_databases td ON t.tenant_id = td.tenant_id
      WHERE t.tenant_id = ? LIMIT 1`,
@@ -911,9 +961,11 @@ async function deployLibraryToTenant(tenantId) {
 
   const t = tRows[0];
   const brandName = t.brand_name || tenantId;
+  const tenantType = (t.tenant_type || 'lpk').toLowerCase();
 
   const [libTemplates] = await mainPool.query(
-    'SELECT * FROM template_library ORDER BY urutan ASC, id_template ASC'
+    'SELECT * FROM template_library WHERE target_type = ? OR target_type = "all" ORDER BY urutan ASC, id_template ASC',
+    [tenantType]
   );
 
   const conn = await mysql.createConnection({

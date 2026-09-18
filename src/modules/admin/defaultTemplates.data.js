@@ -18,7 +18,7 @@
  * ============================================================
  */
 
-const DEFAULT_TEMPLATES_LIBRARY = [
+const LPK_TEMPLATES = [
   // ── 1. LEAD (Onboarding & Initial Verification) ─────────────
   {
     id_template: 'TPL-014',
@@ -595,6 +595,298 @@ const DEFAULT_TEMPLATES_LIBRARY = [
   }
 ];
 
+// ─────────────────────────────────────────────────────────────
+// PUSTAKA TEMPLATE KHUSUS TENANT UMUM / NON-LPK (GENERAL)
+// ─────────────────────────────────────────────────────────────
+const GENERAL_TEMPLATES = [
+  // ── 1. LEAD (Onboarding & Initial Qualification) ───────────
+  {
+    id_template: 'TPL-GEN-001',
+    pipeline: 'LEAD',
+    target_type: 'general',
+    nama_template: 'Welcome Kontak Baru (Bisnis & Umum)',
+    template_name_api: 'gen_welcome_lead_v1',
+    language_code: 'id',
+    body_text: 'Halo Kak {{1}},\n\nTerima kasih telah menghubungi {{tenant_name}}.\n\nUntuk membantu memberikan solusi terbaik, boleh kami tahu apakah kebutuhan Kak {{1}} saat ini untuk keperluan pribadi, bisnis, atau ingin berkonsultasi terlebih dahulu?\n\nSilakan pilih salah satu opsi di bawah ya.',
+    kategori: 'Onboarding',
+    urutan: 1,
+    status_crm: 'ACTIVE',
+    meta_status: 'APPROVED',
+    header_type: null,
+    header_url: null,
+    parameters: JSON.stringify({
+      body: ['CONTACT_NAME'],
+      meta_buttons: [
+        { type: 'QUICK_REPLY', index: 0, text: 'Kebutuhan Bisnis' },
+        { type: 'QUICK_REPLY', index: 1, text: 'Kebutuhan Pribadi' },
+        { type: 'QUICK_REPLY', index: 2, text: 'Konsultasi Dulu' }
+      ]
+    }),
+    meta_buttons: JSON.stringify([
+      { type: 'QUICK_REPLY', text: 'Kebutuhan Bisnis' },
+      { type: 'QUICK_REPLY', text: 'Kebutuhan Pribadi' },
+      { type: 'QUICK_REPLY', text: 'Konsultasi Dulu' }
+    ])
+  },
+  {
+    id_template: 'TPL-GEN-002',
+    pipeline: 'LEAD',
+    target_type: 'general',
+    nama_template: 'Katalog Produk & Penjelasan Layanan',
+    template_name_api: 'gen_catalog_info_v1',
+    language_code: 'id',
+    body_text: 'Halo Kak {{1}},\n\nBerikut ringkasan katalog produk dan layanan unggulan dari {{tenant_name}} yang siap membantu kebutuhan Anda:\n\n1. Paket Starter / Standar\n2. Paket Professional\n3. Layanan Kustom / Enterprise\n\nApakah Kak {{1}} ingin kami kirimkan brosur detail dan simulasi harganya?',
+    kategori: 'Informasi',
+    urutan: 2,
+    status_crm: 'ACTIVE',
+    meta_status: 'APPROVED',
+    header_type: null,
+    header_url: null,
+    parameters: JSON.stringify({
+      body: ['CONTACT_NAME'],
+      meta_buttons: [
+        { type: 'QUICK_REPLY', index: 0, text: 'Kirim Brosur Harga' },
+        { type: 'QUICK_REPLY', index: 1, text: 'Tanya Detail Dulu' }
+      ]
+    }),
+    meta_buttons: JSON.stringify([
+      { type: 'QUICK_REPLY', text: 'Kirim Brosur Harga' },
+      { type: 'QUICK_REPLY', text: 'Tanya Detail Dulu' }
+    ])
+  },
+  {
+    id_template: 'TPL-GEN-003',
+    pipeline: 'LEAD',
+    target_type: 'general',
+    nama_template: 'Follow-up Minat H+1 (General)',
+    template_name_api: 'gen_followup_h1_v1',
+    language_code: 'id',
+    body_text: 'Halo Kak {{1}}, semoga harinya menyenangkan.\n\nMenyambung informasi {{tenant_name}} kemarin, apakah ada hal yang ingin ditanyakan lebih lanjut sebelum kami jadwalkan sesi diskusi lanjutan?\n\nTim kami siap membantu menjawab pertanyaan Kak {{1}}.',
+    kategori: 'Follow Up',
+    urutan: 3,
+    status_crm: 'ACTIVE',
+    meta_status: 'APPROVED',
+    header_type: null,
+    header_url: null,
+    parameters: JSON.stringify({
+      body: ['CONTACT_NAME'],
+      meta_buttons: [
+        { type: 'QUICK_REPLY', index: 0, text: 'Ada yang mau ditanya' },
+        { type: 'QUICK_REPLY', index: 1, text: 'Sudah cukup jelas' }
+      ]
+    }),
+    meta_buttons: JSON.stringify([
+      { type: 'QUICK_REPLY', text: 'Ada yang mau ditanya' },
+      { type: 'QUICK_REPLY', text: 'Sudah cukup jelas' }
+    ])
+  },
+
+  // ── 2. PROSPECT (FNAR & Solution Fit) ───────────────────────
+  {
+    id_template: 'TPL-GEN-004',
+    pipeline: 'PROSPECT',
+    target_type: 'general',
+    nama_template: 'Kualifikasi Kebutuhan & Eksplorasi Solusi',
+    template_name_api: 'gen_solution_fit_v1',
+    language_code: 'id',
+    body_text: 'Halo Kak {{1}},\n\nBerdasarkan kebutuhan yang Kakak sampaikan, tim {{tenant_name}} telah menyiapkan rekomendasi solusi yang paling pas dan efisien.\n\nBoleh kami konfirmasi estimasi waktu implementasi atau kebutuhan kuantitas yang direncanakan?\n\nSilakan pilih salah satu respon di bawah.',
+    kategori: 'Kualifikasi',
+    urutan: 4,
+    status_crm: 'ACTIVE',
+    meta_status: 'APPROVED',
+    header_type: null,
+    header_url: null,
+    parameters: JSON.stringify({
+      body: ['CONTACT_NAME'],
+      meta_buttons: [
+        { type: 'QUICK_REPLY', index: 0, text: 'Bulan Ini' },
+        { type: 'QUICK_REPLY', index: 1, text: '1-3 Bulan Kedepan' },
+        { type: 'QUICK_REPLY', index: 2, text: 'Masih Eksplorasi' }
+      ]
+    }),
+    meta_buttons: JSON.stringify([
+      { type: 'QUICK_REPLY', text: 'Bulan Ini' },
+      { type: 'QUICK_REPLY', text: '1-3 Bulan Kedepan' },
+      { type: 'QUICK_REPLY', text: 'Masih Eksplorasi' }
+    ])
+  },
+  {
+    id_template: 'TPL-GEN-005',
+    pipeline: 'PROSPECT',
+    target_type: 'general',
+    nama_template: 'Kirim Proposal Penawaran Resmi',
+    template_name_api: 'gen_send_proposal_v1',
+    language_code: 'id',
+    body_text: 'Yth. Kak {{1}},\n\nProposal penawaran resmi dari {{tenant_name}} telah kami siapkan sesuai spesifikasi kebutuhan yang didiskusikan.\n\nDokumen lengkap telah kami lampirkan. Apakah Kak {{1}} ingin kami jadwalkan panggilan singkat untuk membedah rincian proposal ini bersama tim pengambil keputusan?',
+    kategori: 'Proposal',
+    urutan: 5,
+    status_crm: 'ACTIVE',
+    meta_status: 'APPROVED',
+    header_type: null,
+    header_url: null,
+    parameters: JSON.stringify({
+      body: ['CONTACT_NAME'],
+      meta_buttons: [
+        { type: 'QUICK_REPLY', index: 0, text: 'Jadwalkan Panggilan' },
+        { type: 'QUICK_REPLY', index: 1, text: 'Pelajari Dulu' }
+      ]
+    }),
+    meta_buttons: JSON.stringify([
+      { type: 'QUICK_REPLY', text: 'Jadwalkan Panggilan' },
+      { type: 'QUICK_REPLY', text: 'Pelajari Dulu' }
+    ])
+  },
+
+  // ── 3. OPPORTUNITY (Decision Consultation & Demo) ───────────
+  {
+    id_template: 'TPL-GEN-006',
+    pipeline: 'OPPORTUNITY',
+    target_type: 'general',
+    nama_template: 'Undangan Product Demo & Meeting Keputusan',
+    template_name_api: 'gen_demo_invite_v1',
+    language_code: 'id',
+    body_text: 'Halo Kak {{1}},\n\nUntuk memastikan solusi dari {{tenant_name}} berjalan optimal bagi bisnis Anda, kami mengundang Kak {{1}} dalam sesi Live Demo & Konsultasi Teknis (30 Menit).\n\nKira-kira waktu mana yang paling nyaman untuk Anda?',
+    kategori: 'Undangan',
+    urutan: 6,
+    status_crm: 'ACTIVE',
+    meta_status: 'APPROVED',
+    header_type: null,
+    header_url: null,
+    parameters: JSON.stringify({
+      body: ['CONTACT_NAME'],
+      meta_buttons: [
+        { type: 'QUICK_REPLY', index: 0, text: 'Pagi (09.00 - 12.00)' },
+        { type: 'QUICK_REPLY', index: 1, text: 'Siang (13.00 - 16.00)' },
+        { type: 'QUICK_REPLY', index: 2, text: 'Atur Jadwal Lain' }
+      ]
+    }),
+    meta_buttons: JSON.stringify([
+      { type: 'QUICK_REPLY', text: 'Pagi (09.00 - 12.00)' },
+      { type: 'QUICK_REPLY', text: 'Siang (13.00 - 16.00)' },
+      { type: 'QUICK_REPLY', text: 'Atur Jadwal Lain' }
+    ])
+  },
+  {
+    id_template: 'TPL-GEN-007',
+    pipeline: 'OPPORTUNITY',
+    target_type: 'general',
+    nama_template: 'Follow-up Negosiasi & Finalisasi Kontrak',
+    template_name_api: 'gen_contract_followup_v1',
+    language_code: 'id',
+    body_text: 'Halo Kak {{1}},\n\nMenindaklanjuti pertemuan kita sebelumnya, kami ingin memastikan apakah ada poin penawaran atau klausul kerjasama dari {{tenant_name}} yang perlu disesuaikan kembali?\n\nKami siap memberikan fleksibilitas terbaik demi kelancaran kolaborasi kita.',
+    kategori: 'Follow Up',
+    urutan: 7,
+    status_crm: 'ACTIVE',
+    meta_status: 'APPROVED',
+    header_type: null,
+    header_url: null,
+    parameters: JSON.stringify({
+      body: ['CONTACT_NAME'],
+      meta_buttons: [
+        { type: 'QUICK_REPLY', index: 0, text: 'Siap Lanjut Order' },
+        { type: 'QUICK_REPLY', index: 1, text: 'Perlu Revisi Harga' }
+      ]
+    }),
+    meta_buttons: JSON.stringify([
+      { type: 'QUICK_REPLY', text: 'Siap Lanjut Order' },
+      { type: 'QUICK_REPLY', text: 'Perlu Revisi Harga' }
+    ])
+  },
+
+  // ── 4. REGISTERED (Order Confirmation / Invoice) ───────────
+  {
+    id_template: 'TPL-GEN-008',
+    pipeline: 'REGISTERED',
+    target_type: 'general',
+    nama_template: 'Konfirmasi Order & Invoice Pembayaran',
+    template_name_api: 'gen_invoice_order_v1',
+    language_code: 'id',
+    body_text: 'Yth. Kak {{1}},\n\nPemesanan Anda di {{tenant_name}} telah berhasil didaftarkan ke dalam sistem kami.\n\nNomor Invoice: {{2}}\n\nSilakan selesaikan pembayaran sesuai tagihan yang tertera agar pesanan/layanan dapat segera kami proses. Balas pesan ini jika memerlukan bantuan rekening atau konfirmasi.',
+    kategori: 'Transaksi',
+    urutan: 8,
+    status_crm: 'ACTIVE',
+    meta_status: 'APPROVED',
+    header_type: null,
+    header_url: null,
+    parameters: JSON.stringify({
+      body: ['CONTACT_NAME', 'INVOICE_NUMBER'],
+      meta_buttons: [
+        { type: 'QUICK_REPLY', index: 0, text: 'Sudah Transfer' },
+        { type: 'QUICK_REPLY', index: 1, text: 'Tanya Rekening' }
+      ]
+    }),
+    meta_buttons: JSON.stringify([
+      { type: 'QUICK_REPLY', text: 'Sudah Transfer' },
+      { type: 'QUICK_REPLY', text: 'Tanya Rekening' }
+    ])
+  },
+
+  // ── 5. CUSTOMER (Closing & Official Onboarding) ────────────
+  {
+    id_template: 'TPL-GEN-009',
+    pipeline: 'CUSTOMER',
+    target_type: 'general',
+    nama_template: 'Selamat Datang Pelanggan Resmi (Onboarding)',
+    template_name_api: 'gen_welcome_customer_v1',
+    language_code: 'id',
+    body_text: 'Selamat datang Kak {{1}} di keluarga besar pelanggan {{tenant_name}}!\n\nPembayaran Anda telah kami terima dan diverifikasi resmi. Layanan/produk Anda saat ini telah aktif dan siap digunakan.\n\nJika membutuhkan bantuan teknis atau layanan purna jual, tim support kami siap melayani Anda.',
+    kategori: 'Onboarding',
+    urutan: 9,
+    status_crm: 'ACTIVE',
+    meta_status: 'APPROVED',
+    header_type: null,
+    header_url: null,
+    parameters: JSON.stringify({
+      body: ['CONTACT_NAME'],
+      meta_buttons: [
+        { type: 'QUICK_REPLY', index: 0, text: 'Mulai Penggunaan' },
+        { type: 'QUICK_REPLY', index: 1, text: 'Hubungi Support' }
+      ]
+    }),
+    meta_buttons: JSON.stringify([
+      { type: 'QUICK_REPLY', text: 'Mulai Penggunaan' },
+      { type: 'QUICK_REPLY', text: 'Hubungi Support' }
+    ])
+  },
+
+  // ── 6. SNOOZE (Re-engagement Kontak Pasif) ─────────────────
+  {
+    id_template: 'TPL-GEN-010',
+    pipeline: 'SNOOZE',
+    target_type: 'general',
+    nama_template: 'Re-engagement Kontak Pasif (General)',
+    template_name_api: 'gen_reengage_snooze_v1',
+    language_code: 'id',
+    body_text: 'Halo Kak {{1}}, sudah cukup lama sejak komunikasi terakhir kita dengan {{tenant_name}}.\n\nKami hanya ingin menyapa dan mengecek apakah kebutuhan terkait produk/layanan Anda saat ini masih berjalan atau sedang ada rencana pengembangan baru?\n\nSilakan pilih respon yang paling sesuai ya.',
+    kategori: 'Snooze',
+    urutan: 10,
+    status_crm: 'ACTIVE',
+    meta_status: 'APPROVED',
+    header_type: null,
+    header_url: null,
+    parameters: JSON.stringify({
+      body: ['CONTACT_NAME'],
+      meta_buttons: [
+        { type: 'QUICK_REPLY', index: 0, text: 'Masih Butuh Solusi' },
+        { type: 'QUICK_REPLY', index: 1, text: 'Belum Butuh Sekarang' },
+        { type: 'QUICK_REPLY', index: 2, text: 'Hentikan Kontak' }
+      ]
+    }),
+    meta_buttons: JSON.stringify([
+      { type: 'QUICK_REPLY', text: 'Masih Butuh Solusi' },
+      { type: 'QUICK_REPLY', text: 'Belum Butuh Sekarang' },
+      { type: 'QUICK_REPLY', text: 'Hentikan Kontak' }
+    ])
+  }
+];
+
+const DEFAULT_TEMPLATES_LIBRARY = [
+  ...LPK_TEMPLATES.map(t => ({ ...t, target_type: 'lpk' })),
+  ...GENERAL_TEMPLATES
+];
+
 module.exports = {
-  DEFAULT_TEMPLATES_LIBRARY
+  DEFAULT_TEMPLATES_LIBRARY,
+  LPK_TEMPLATES,
+  GENERAL_TEMPLATES
 };

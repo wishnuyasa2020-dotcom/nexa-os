@@ -201,7 +201,8 @@ async function templateStats(req, res) {
  */
 async function getTemplateLibrary(req, res) {
   try {
-    const data = await adminService.getTemplateLibrary();
+    const targetType = req.query.type || req.query.target_type;
+    const data = await adminService.getTemplateLibrary(targetType);
     res.json({ status: 'ok', data });
   } catch (err) {
     res.status(500).json({ status: 'error', message: err.message });
