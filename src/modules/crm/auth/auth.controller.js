@@ -8,11 +8,11 @@ const authService = require('./auth.service');
  */
 async function login(req, res) {
   try {
-    const { username, password } = req.body;
+    const { username, password, tenant_type } = req.body;
     if (!username || !password) {
       return res.status(400).json({ status: 'error', message: 'Username dan password wajib diisi.' });
     }
-    const result = await authService.login(username, password);
+    const result = await authService.login(username, password, tenant_type);
     if (!result.success) {
       return res.status(401).json({ status: 'error', message: result.message });
     }

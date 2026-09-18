@@ -94,7 +94,7 @@ function verifyJWT(token) {
 /**
  * Login user — kompatibel dengan password lama GAS (SHA256+salt) maupun plaintext.
  */
-async function login(username, password) {
+async function login(username, password, requestedTenantType = null) {
   let rows = null;
   let isTenant = false;
   let tenantId = null;
@@ -220,15 +220,37 @@ async function login(username, password) {
     await activeConn.end();
   }
 
+  // Ambil tenant_type dari tabel tenants di mainPool
+  let tenantType = 'lpk';
+  try {
+    const { mainPool } = require('../../../config/database');
+    const [[tenantRecord]] = await mainPool.query(
+      'SELECT tenant_type FROM tenants WHERE tenant_id = ? LIMIT 1',
+      [tenantId || 'crm-demo']
+    );
+    if (tenantRecord && tenantRecord.tenant_type) {
+      tenantType = tenantRecord.tenant_type;
+    }
+  } catch (errType) {
+    console.warn('[Auth] Gagal ambil tenant_type:', errType.message);
+  }
+
+  // Khusus demo user / tenant crm-demo: izinkan switcher jenis tenant LPK vs General
+  const isDemoAccount = (tenantId === 'crm-demo' || String(rows.username).toLowerCase() === 'demo');
+  if (isDemoAccount && requestedTenantType && ['lpk', 'general'].includes(String(requestedTenantType).toLowerCase())) {
+    tenantType = String(requestedTenantType).toLowerCase();
+  }
+
   const user = {
-    id:       rows.id,
-    username: String(rows.username).trim(),
-    nama:     String(rows.nama    || '').trim(),
-    role:     String(rows.role    || '').trim(),
-    tenant_id: isTenant ? tenantId : 'crm-demo',
+    id:          rows.id,
+    username:    String(rows.username).trim(),
+    nama:        String(rows.nama    || '').trim(),
+    role:        String(rows.role    || '').trim(),
+    tenant_id:   isTenant ? tenantId : 'crm-demo',
+    tenant_type: tenantType,
   };
 
-  const payload = { ...user, selectedPeriod: activePeriod };
+  const payload = { ...user, selectedPeriod: activePeriod, tenant_type: tenantType };
   if (isTenant) {
     payload.tenantId = tenantId;
   }
