@@ -14,16 +14,21 @@ async function syncStudentCurrentState(connOrPool, studentIds = null) {
 
     await connOrPool.query(`
       INSERT INTO student_current_state
-        (id_siswa, nama_siswa, cro_assignee, pipeline_state, status_label, marketing_period, updated_at)
+        (id_siswa, nama_siswa, cro_assignee, pipeline_state, relationship_level, status_label, marketing_period, updated_at)
       SELECT
         sp.id_siswa,
         ms.nama_lengkap,
         sp.cro,
-        CASE UPPER(TRIM(COALESCE(sp.commercial_state, 'KNOWN_PROFILE')))
+        CASE UPPER(TRIM(COALESCE(NULLIF(sp.commercial_state, ''), 'KNOWN_PROFILE')))
           WHEN 'KNOWN' THEN 'KNOWN_PROFILE'
           WHEN 'REGISTERED OPPORTUNITY' THEN 'REGISTERED'
-          ELSE UPPER(TRIM(COALESCE(sp.commercial_state, 'KNOWN_PROFILE')))
+          WHEN 'REGISTERED_OPPORTUNITY' THEN 'REGISTERED'
+          WHEN 'TERDAFTAR FORMULIR' THEN 'REGISTERED'
+          WHEN 'ALUMNI' THEN 'POST_CUSTOMER'
+          WHEN 'MANTAN PELANGGAN' THEN 'POST_CUSTOMER'
+          ELSE UPPER(TRIM(COALESCE(NULLIF(sp.commercial_state, ''), 'KNOWN_PROFILE')))
         END,
+        COALESCE(sp.relationship_level, ms.relationship_level, 'STANDARD'),
         sp.status_terkini,
         sp.marketing_period,
         COALESCE(sp.last_updated, sp.created_date, NOW())
@@ -37,12 +42,13 @@ async function syncStudentCurrentState(connOrPool, studentIds = null) {
       )
       ${hasFilter ? 'AND sp.id_siswa IN (?)' : ''}
       ON DUPLICATE KEY UPDATE
-        nama_siswa       = VALUES(nama_siswa),
-        cro_assignee     = VALUES(cro_assignee),
-        pipeline_state   = VALUES(pipeline_state),
-        status_label     = VALUES(status_label),
-        marketing_period = VALUES(marketing_period),
-        updated_at       = VALUES(updated_at);
+        nama_siswa         = VALUES(nama_siswa),
+        cro_assignee       = VALUES(cro_assignee),
+        pipeline_state     = VALUES(pipeline_state),
+        relationship_level = VALUES(relationship_level),
+        status_label       = VALUES(status_label),
+        marketing_period   = VALUES(marketing_period),
+        updated_at         = VALUES(updated_at);
     `, params);
   } catch (err) {
     console.warn('[ProjectionSync] Gagal sinkronisasi student_current_state (non-fatal):', err.message);

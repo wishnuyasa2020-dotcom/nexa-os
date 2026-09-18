@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { pool } = require('../../../config/database');
+const { syncStudentCurrentState } = require('../student.projection');
 
 /**
  * Helper pencatatan event immutable ke events_log (Event-Sourcing CQRS)
@@ -307,8 +308,10 @@ async function simulateReEntry(targetId, options = {}) {
   const params = [sourcePeriod, target.nama_period];
 
   if (excludeCustomer) {
-    whereConditions.push("LOWER(IFNULL(sp.commercial_state, '')) != 'customer'");
+    whereConditions.push("LOWER(IFNULL(sp.commercial_state, '')) NOT IN ('customer', 'post_customer')");
     whereConditions.push("LOWER(IFNULL(sp.status_terkini, '')) NOT LIKE '%closing%'");
+    whereConditions.push("LOWER(IFNULL(sp.status_terkini, '')) NOT LIKE '%customer%'");
+    whereConditions.push("LOWER(IFNULL(sp.status_terkini, '')) NOT LIKE '%alumni%'");
   }
 
   if (excludeRegistered) {
@@ -382,8 +385,10 @@ async function executeReEntry(targetId, options = {}, actor = 'System') {
   const params = [sourcePeriod, target.nama_period];
 
   if (excludeCustomer) {
-    whereConditions.push("LOWER(IFNULL(sp.commercial_state, '')) != 'customer'");
+    whereConditions.push("LOWER(IFNULL(sp.commercial_state, '')) NOT IN ('customer', 'post_customer')");
     whereConditions.push("LOWER(IFNULL(sp.status_terkini, '')) NOT LIKE '%closing%'");
+    whereConditions.push("LOWER(IFNULL(sp.status_terkini, '')) NOT LIKE '%customer%'");
+    whereConditions.push("LOWER(IFNULL(sp.status_terkini, '')) NOT LIKE '%alumni%'");
   }
   if (excludeRegistered) {
     whereConditions.push("LOWER(IFNULL(sp.commercial_state, '')) NOT IN ('registered', 'registered opportunity')");
@@ -416,8 +421,10 @@ async function executeReEntry(targetId, options = {}, actor = 'System') {
     await conn.beginTransaction();
 
     const targetCohortClean = target.nama_period.replace(/[^a-zA-Z0-9]/g, '');
+    const reenteredStudentIds = [];
 
     for (const student of eligibleList) {
+      reenteredStudentIds.push(student.id_siswa);
       const recordId = `REC-SW-${targetCohortClean}-${student.id_siswa}`;
       const appId = `APP-${targetCohortClean}-${student.id_siswa}`;
       const eventId = `EVT-APP-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
@@ -491,6 +498,11 @@ async function executeReEntry(targetId, options = {}, actor = 'System') {
       ) VALUES (?, 'cohort', ?, 'CohortReEntryExecuted', ?, ?, ?, NOW())`,
       [execEventId, target.nama_period, JSON.stringify(payloadExec), actor || 'System', target.nama_period]
     );
+
+    // 5. Sinkronisasi status siswa ke student_current_state (Projection Read-Model)
+    if (reenteredStudentIds.length > 0) {
+      await syncStudentCurrentState(conn, reenteredStudentIds);
+    }
 
     await conn.commit();
 

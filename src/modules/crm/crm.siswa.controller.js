@@ -219,6 +219,17 @@ async function getRegistrationToken(req, res) {
   }
 }
 
+// ── POST /api/v1/siswa/:id/graduate ─────────────────────────────────────────
+async function graduateSiswa(req, res) {
+  try {
+    const data = await svc.graduateSiswa(req.params.id, req.body, req.user);
+    res.json({ status: 'ok', message: data.message, data });
+  } catch (err) {
+    console.error('[siswa] graduateSiswa Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
 module.exports = {
   getList,
   getDetail,
@@ -238,6 +249,7 @@ module.exports = {
   listHomeVisits,
   getProspectsForConsultation,
   getRegistrationToken,
+  graduateSiswa,
 };
 
 

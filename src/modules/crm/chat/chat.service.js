@@ -25,6 +25,8 @@ const FormData = require('form-data');
 const fs       = require('fs');
 const path     = require('path');
 const os       = require('os');
+const engine   = require('./templateEngine.service');
+const { normalizeLifecycleState } = require('../../../config/lifecycle.constants');
 
 // ── Helper: baca credentials WABA Pilot / BYOW dari nexamain.tenants ─────────
 async function _getTenantWaCredentials() {
@@ -118,6 +120,17 @@ async function getConversationList(user, query = {}) {
     params.push(user.nama, user.id);
   }
 
+  // Filter opsional berdasarkan 8 Canonical Lifecycle States (Ontologi v2)
+  const lifecycleFilter = query.lifecycle_state || query.pipeline || null;
+  if (lifecycleFilter) {
+    const norm = normalizeLifecycleState(lifecycleFilter);
+    whereParts.push(`EXISTS (
+      SELECT 1 FROM student_current_state scs_filter
+      WHERE scs_filter.id_siswa = c.id_siswa AND scs_filter.pipeline_state = ?
+    )`);
+    params.push(norm);
+  }
+
   const where = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
 
   const [[{ total }]] = await pool.query(
@@ -142,8 +155,13 @@ async function getConversationList(user, query = {}) {
        c.last_sender,
        c.last_msg_ts,
        c.created_at,
-       COALESCE(scs.pipeline_state, sp.commercial_state) AS pipeline_status,
-       COALESCE(scs.status_label, sp.status_terkini) AS status_label,
+       COALESCE(scs.pipeline_state, 'AUDIENCE') AS pipeline_status,
+       scs.status_label AS status_label,
+       COALESCE(scs.pipeline_state, 'AUDIENCE') AS lifecycle_state,
+       COALESCE(scs.relationship_level, 'STANDARD') AS relationship_level,
+       ms.source_channel,
+       ms.source_detail,
+       ms.kebutuhan_layanan,
        (SELECT COUNT(*) FROM chat_messages cm
         WHERE cm.conv_id = c.conv_id
           AND cm.direction = 'incoming'
@@ -152,8 +170,8 @@ async function getConversationList(user, query = {}) {
        (SELECT token FROM registration_tokens rt WHERE rt.id_siswa = c.id_siswa AND rt.status = 'pending' ORDER BY rt.created_at DESC LIMIT 1) AS pending_registration_token,
        (SELECT COUNT(*) FROM events_log el WHERE el.aggregate_id = c.id_siswa AND el.event_type = 'PaymentProofSubmitted' AND el.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)) AS has_payment_proof
      FROM conversations c
-     LEFT JOIN siswa_periode sp ON sp.id_siswa = c.id_siswa
      LEFT JOIN student_current_state scs ON scs.id_siswa = c.id_siswa
+     LEFT JOIN master_siswa ms ON ms.id_siswa = c.id_siswa
      ${where}
      ORDER BY c.last_msg_ts DESC
      LIMIT ? OFFSET ?`,
@@ -216,6 +234,24 @@ async function initiateConversation(id_siswa, user) {
 
   if (!waNumber) {
     throw new Error('Siswa tidak memiliki nomor WA atau BSUID yang bisa dihubungi');
+  }
+
+  const phoneClean = String(waNumber).replace(/[^0-9]/g, '');
+
+  // GAP-BE4-10: Cek apakah ada percakapan orphan dengan nomor WA yang sama
+  const [orphan] = await pool.query(
+    'SELECT conv_id FROM conversations WHERE (wa_number = ? OR wa_number = ?) LIMIT 1',
+    [waNumber, phoneClean]
+  );
+
+  if (orphan.length > 0) {
+    const existingConvId = orphan[0].conv_id;
+    console.log(`[Chat] Menautkan percakapan nomor WA yang sudah ada (${existingConvId}) ke id_siswa: ${id_siswa}`);
+    await pool.query(
+      'UPDATE conversations SET id_siswa = ?, student_name = ? WHERE conv_id = ?',
+      [id_siswa, student.nama_lengkap, existingConvId]
+    );
+    return { conv_id: existingConvId };
   }
 
   // Create new conversation with generated UUID
@@ -373,6 +409,40 @@ async function sendMessage(convId, payload, user) {
     }
 
     // 3. SMART ROUTING
+    let studentContext = {
+      student_name: conv.student_name,
+      namaSiswa:    conv.student_name,
+      phone,
+      school_name:  'Sekolah',
+      namaSekolah:  'Sekolah',
+      tenantName:   waCreds?.brandName || '',
+      brandName:    waCreds?.brandName || '',
+    };
+
+    if (conv.id_siswa) {
+      const [stRows] = await conn.query(
+        `SELECT ms.id_siswa, ms.nama_lengkap, ms.wa, ms.id_sekolah, ms.source_channel,
+                sek.nama_sekolah
+         FROM master_siswa ms
+         LEFT JOIN master_sekolah sek ON sek.id_sekolah = ms.id_sekolah
+         WHERE ms.id_siswa = ? LIMIT 1`,
+        [conv.id_siswa]
+      );
+      if (stRows.length > 0) {
+        const st = stRows[0];
+        studentContext = {
+          ...studentContext,
+          student_name: st.nama_lengkap || conv.student_name,
+          namaSiswa:    st.nama_lengkap || conv.student_name,
+          phone:        st.wa || phone,
+          id_siswa:     st.id_siswa,
+          idSiswa:      st.id_siswa,
+          school_name:  st.nama_sekolah || 'Sekolah',
+          namaSekolah:  st.nama_sekolah || 'Sekolah',
+        };
+      }
+    }
+
     if (templateId) {
       const [[tmpl]] = await conn.query(
         'SELECT * FROM wa_templates WHERE id_template = ? AND status_crm = "ACTIVE" LIMIT 1',
@@ -382,11 +452,8 @@ async function sendMessage(convId, payload, user) {
       if (!tmpl) throw new Error('Template tidak ditemukan atau tidak aktif.');
       tmplRecord = tmpl;
 
-      // Resolve variabel template dengan data siswa
-      finalBody = resolveTemplateVariables(tmplRecord, {
-        student_name: conv.student_name,
-        phone,
-      });
+      // Resolve variabel template dengan data siswa yang diperkaya
+      finalBody = resolveTemplateVariables(tmplRecord, studentContext);
 
       if (isSwOpen) {
         // SW OPEN → kirim sebagai teks biasa (hemat biaya)
@@ -417,7 +484,8 @@ async function sendMessage(convId, payload, user) {
         locationData, 
         type: actualType, 
         filename: file?.originalname,
-        freeTemplate: !sentAsTemplate && templateId ? tmplRecord : null
+        freeTemplate: !sentAsTemplate && templateId ? tmplRecord : null,
+        context: studentContext
       });
     } catch (metaErr) {
       // Jika Meta gagal — tetap simpan sebagai 'failed', jangan rollback
@@ -487,8 +555,8 @@ async function sendMessage(convId, payload, user) {
       });
       await conn.query(
         `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
-         VALUES (?, 'conversation', ?, 'MessageSent', ?, ?, NOW())`,
-        [eventId, String(convId), eventPayload, user.nama || 'system']
+         VALUES (?, ?, ?, 'MessageSent', ?, ?, NOW())`,
+        [eventId, conv.id_siswa ? 'siswa' : 'conversation', String(conv.id_siswa || convId), eventPayload, user.nama || 'system']
       ).catch(e => console.warn('[Chat] events_log MessageSent insert failed (non-fatal):', e.message));
     }
 
@@ -550,10 +618,11 @@ function resolveTemplateVariables(tmpl, data = {}) {
       const parsedParams = typeof tmpl.parameters === 'string' ? JSON.parse(tmpl.parameters) : tmpl.parameters;
       if (parsedParams.body && Array.isArray(parsedParams.body)) {
         vars = parsedParams.body.map(paramName => {
-          if (paramName === 'STUDENT_NAME') return data.student_name || '';
+          if (paramName === 'STUDENT_NAME') return data.student_name || data.namaSiswa || '';
           if (paramName === 'PHONE_NUMBER') return data.phone || '';
-          if (paramName === 'SCHOOL_NAME') return data.school_name || 'Sekolah';
+          if (paramName === 'SCHOOL_NAME') return data.school_name || data.namaSekolah || 'Sekolah';
           if (paramName === 'TENANT_NAME' || paramName === 'BRAND_NAME') return tenantBrand;
+          if (paramName === 'STUDENT_ID') return data.id_siswa || data.idSiswa || '';
           return '';
         });
       }
@@ -563,9 +632,9 @@ function resolveTemplateVariables(tmpl, data = {}) {
   // Fallback (legacy hardcoded) jika vars masih kosong
   if (vars.length === 0) {
     vars = [
-      data.student_name || '',
+      data.student_name || data.namaSiswa || '',
       data.phone        || '',
-      data.school_name  || 'Sekolah',
+      data.school_name  || data.namaSekolah || 'Sekolah',
     ];
   }
   
@@ -596,8 +665,46 @@ async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) 
 
   let msgBody;
   if (templatePayload) {
-    // Kirim sebagai Meta Template
-    const parameters = JSON.parse(templatePayload.parameters || '[]');
+    // Kirim sebagai Meta Template (SW CLOSED)
+    // [GAP-BE4-06] Build Meta API Components via templateEngine agar parameter terisi presisi
+    let components = [];
+    if (extra.context) {
+      try {
+        const schema = engine.parseSchema(templatePayload.parameters);
+        const resComp = engine.buildComponents(schema, extra.context);
+        if (resComp.success && resComp.components) {
+          components = resComp.components;
+        }
+      } catch (e) {
+        console.warn('[Chat] Gagal buildComponents via templateEngine:', e.message);
+      }
+    }
+
+    // Fallback jika components masih kosong
+    if (components.length === 0) {
+      try {
+        let parsedParams = [];
+        if (templatePayload.parameters) {
+          const raw = typeof templatePayload.parameters === 'string' ? JSON.parse(templatePayload.parameters) : templatePayload.parameters;
+          if (Array.isArray(raw)) parsedParams = raw;
+          else if (raw.body && Array.isArray(raw.body)) {
+            parsedParams = raw.body.map(p => {
+              if (p === 'STUDENT_NAME') return extra.context?.student_name || extra.context?.namaSiswa || '';
+              if (p === 'SCHOOL_NAME') return extra.context?.school_name || extra.context?.namaSekolah || 'Sekolah';
+              if (p === 'PHONE_NUMBER') return extra.context?.phone || toPhone;
+              return '';
+            });
+          }
+        }
+        if (parsedParams.length > 0) {
+          components = [{
+            type: 'body',
+            parameters: parsedParams.map(v => ({ type: 'text', text: String(v) })),
+          }];
+        }
+      } catch (e) {}
+    }
+
     msgBody = {
       messaging_product: 'whatsapp',
       to:   toPhone,
@@ -605,10 +712,7 @@ async function sendToMetaApi(toPhone, text, templatePayload = null, extra = {}) 
       template: {
         name:     templatePayload.template_name_api,
         language: { code: templatePayload.language_code || 'id' },
-        components: parameters.length > 0 ? [{
-          type:       'body',
-          parameters: parameters.map(v => ({ type: 'text', text: String(v) })),
-        }] : [],
+        components,
       },
     };
   } else if (extra.freeTemplate) {

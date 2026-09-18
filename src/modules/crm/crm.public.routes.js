@@ -291,12 +291,12 @@ router.post('/:tenantSlug/register', rateLimiter, async (req, res) => {
           ]);
         }
 
-        // 2. Insert siswa_periode (Commercial State: 'Known', Status: 'Data Masuk', cro = NULL/Unassigned)
+        // 2. Insert siswa_periode (Commercial State: 'KNOWN_PROFILE', Status: 'Data Masuk', cro = NULL/Unassigned)
         const idRecord = `SWP-${Date.now().toString().slice(-6)}-${Math.floor(Math.random()*1000)}`;
         await conn.query(`
           INSERT INTO siswa_periode 
             (id_record, id_siswa, nama_siswa, marketing_period, status_terkini, commercial_state, next_action, due_date, cro, prioritas, created_date)
-          VALUES (?, ?, ?, ?, 'Data Masuk', 'Known', 'Screening', DATE_ADD(CURDATE(), INTERVAL 1 DAY), NULL, ?, NOW())
+          VALUES (?, ?, ?, ?, 'Data Masuk', 'KNOWN_PROFILE', 'Screening', DATE_ADD(CURDATE(), INTERVAL 1 DAY), NULL, ?, NOW())
         `, [idRecord, idSiswa, nama_lengkap.trim(), mp, prioritas]);
 
         // 3. Event-Sourcing: LeadCapturedViaForm
@@ -341,6 +341,9 @@ router.post('/:tenantSlug/register', rateLimiter, async (req, res) => {
           }),
           mp
         ]);
+
+        // 5. Sinkronisasi Read-Model Projection (student_current_state)
+        await siswaSvc.syncStudentCurrentState(conn, [idSiswa]);
 
         await conn.commit();
 

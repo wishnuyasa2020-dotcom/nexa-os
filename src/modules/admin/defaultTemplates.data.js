@@ -9,7 +9,7 @@
  * - LEAD
  * - PROSPECT
  * - OPPORTUNITY
- * - REGISTERED_OPPORTUNITY
+ * - REGISTERED
  * - CUSTOMER
  * - SNOOZE
  *
@@ -482,10 +482,10 @@ const DEFAULT_TEMPLATES_LIBRARY = [
     ])
   },
 
-  // ── 4. REGISTERED_OPPORTUNITY (Komitmen Formulir & Pre-Core) ─
+  // ── 4. REGISTERED (Komitmen Formulir & Pre-Core) ─
   {
     id_template: 'TPL-011',
-    pipeline: 'REGISTERED_OPPORTUNITY',
+    pipeline: 'REGISTERED',
     nama_template: 'Reminder Dokumen',
     template_name_api: 'reminder_dokumen',
     language_code: 'id',
@@ -503,7 +503,7 @@ const DEFAULT_TEMPLATES_LIBRARY = [
   },
   {
     id_template: 'TPL-012',
-    pipeline: 'REGISTERED_OPPORTUNITY',
+    pipeline: 'REGISTERED',
     nama_template: 'Reminder Pendaftaran',
     template_name_api: 'reminder_pendaftaran',
     language_code: 'id',
@@ -521,7 +521,7 @@ const DEFAULT_TEMPLATES_LIBRARY = [
   },
   {
     id_template: 'TPL-BC00DB54',
-    pipeline: 'REGISTERED_OPPORTUNITY',
+    pipeline: 'REGISTERED',
     nama_template: 'push_bayar',
     template_name_api: 'push_bayar',
     language_code: 'id',

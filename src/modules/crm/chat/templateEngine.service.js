@@ -54,15 +54,18 @@
 // ── Daftar variabel yang dikenal engine ───────────────────────────────────────
 // Sinkronkan dengan KNOWN_VARS di frontend (TemplateFormModal.tsx)
 const KNOWN_VARIABLES = {
-  STUDENT_NAME:      (ctx) => String(ctx.namaSiswa        || '').trim(),
-  SCHOOL_NAME:       (ctx) => String(ctx.namaSekolah      || '').trim(),
-  STUDENT_ID:        (ctx) => String(ctx.idSiswa          || '').trim(),
+  STUDENT_NAME:      (ctx) => String(ctx.namaSiswa || ctx.student_name || ctx.nama_lengkap || ctx.studentName || '').trim(),
+  SCHOOL_NAME:       (ctx) => String(ctx.namaSekolah || ctx.school_name || ctx.nama_sekolah || ctx.schoolName || 'Sekolah').trim(),
+  STUDENT_ID:        (ctx) => String(ctx.idSiswa || ctx.student_id || ctx.id_siswa || ctx.studentId || '').trim(),
+  PHONE_NUMBER:      (ctx) => String(ctx.phone || ctx.wa || ctx.no_wa || ctx.phoneNumber || ctx.wa_number || '').trim(),
   // ── Variabel tambahan (v2) ────────────────────────────────
-  TENANT_NAME:       (ctx) => String(ctx.tenantName       || ctx.brandName || '').trim(),
-  BRAND_NAME:        (ctx) => String(ctx.brandName        || ctx.tenantName || '').trim(),
-  CONSULTATION_DATE: (ctx) => String(ctx.consultationDate || '').trim(),
-  HOME_VISIT_DATE:   (ctx) => String(ctx.homeVisitDate    || '').trim(),
-  SNOOZE_LEVEL:      (ctx) => String(ctx.snoozeLevel      !== undefined ? ctx.snoozeLevel : '').trim(),
+  TENANT_NAME:       (ctx) => String(ctx.tenantName || ctx.brandName || ctx.tenant_name || ctx.brand_name || '').trim(),
+  BRAND_NAME:        (ctx) => String(ctx.brandName || ctx.tenantName || ctx.brand_name || ctx.tenant_name || '').trim(),
+  CONSULTATION_DATE: (ctx) => String(ctx.consultationDate || ctx.consultation_date || '').trim(),
+  HOME_VISIT_DATE:   (ctx) => String(ctx.homeVisitDate || ctx.home_visit_date || '').trim(),
+  SNOOZE_LEVEL:      (ctx) => String(ctx.snoozeLevel !== undefined ? ctx.snoozeLevel : (ctx.snooze_level !== undefined ? ctx.snooze_level : '')).trim(),
+  LIFECYCLE_STATE:   (ctx) => String(ctx.lifecycleState || ctx.lifecycle_state || ctx.commercial_state || '').trim(),
+  RELATIONSHIP_LEVEL:(ctx) => String(ctx.relationshipLevel || ctx.relationship_level || 'STANDARD').trim(),
   // ── Slot untuk variabel masa depan ────────────────────────
   // REGISTRATION_FEE:  (ctx) => String(ctx.registrationFee  || '').trim(),
   // PROGRAM_NAME:      (ctx) => String(ctx.programName      || '').trim(),

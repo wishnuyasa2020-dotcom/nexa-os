@@ -132,10 +132,11 @@ async function listSiswa(user, query = {}) {
     params.push(query.sekolahId || query.idSekolah);
   }
   if (query.status)          { whereParts.push('sp.status_terkini = ?');   params.push(query.status); }
-  if (query.commercialState) {
-    const norm = normalizeLifecycleState(query.commercialState);
+  const targetState = query.lifecycle_state || query.lifecycleState || query.commercialState;
+  if (targetState) {
+    const norm = normalizeLifecycleState(targetState);
     whereParts.push('(sp.commercial_state = ? OR sp.commercial_state = ?)');
-    params.push(norm, query.commercialState);
+    params.push(norm, targetState);
   }
   if (query.intent)          { whereParts.push('sp.intent = ?');            params.push(query.intent); }
   if (query.kelas)           { whereParts.push('mk.nama_kelas = ?');        params.push(query.kelas); }
@@ -178,6 +179,10 @@ async function listSiswa(user, query = {}) {
       IFNULL(sp.cro, '') as cro,
       IFNULL(sp.status_terkini, '') as status,
       IFNULL(sp.commercial_state, 'LEAD') as commercialState,
+      IFNULL(sp.commercial_state, 'LEAD') as commercial_state,
+      IFNULL(sp.commercial_state, 'LEAD') as lifecycle_state,
+      COALESCE(sp.relationship_level, ms.relationship_level, 'STANDARD') as relationshipLevel,
+      COALESCE(sp.relationship_level, ms.relationship_level, 'STANDARD') as relationship_level,
       IFNULL(sp.intent, '') as intent,
       IFNULL(sp.priority_score, 0) as priorityScore,
       IFNULL(sp.next_action, '') as nextAction,
@@ -237,6 +242,10 @@ async function detailSiswa(id, user, query = {}) {
       mk.nama_kelas as kelas, ms.minat_awal, ms.rencana_lulus, sp.prioritas,
       sp.status_terkini,
       IFNULL(sp.commercial_state, 'LEAD') as commercial_state,
+      IFNULL(sp.commercial_state, 'LEAD') as commercialState,
+      IFNULL(sp.commercial_state, 'LEAD') as lifecycle_state,
+      COALESCE(sp.relationship_level, ms.relationship_level, 'STANDARD') as relationship_level,
+      COALESCE(sp.relationship_level, ms.relationship_level, 'STANDARD') as relationshipLevel,
       IFNULL(sp.intent, 'Mid') as intent,
       IFNULL(sp.priority_score, 0) as priority_score,
       sp.next_action, DATE_FORMAT(sp.due_date, '%Y-%m-%d') as due_date,
@@ -288,10 +297,13 @@ async function tambahSiswa(data, user) {
   const sourceDetail = data.source_detail || data.sourceDetail || null;
   const kebutuhanLayanan = data.kebutuhan_layanan || data.kebutuhanLayanan || null;
 
-  // Validate required (id_sekolah hanya wajib jika jalur sekolah)
+  // Validate required (id_sekolah wajib untuk jalur sekolah, source_detail wajib untuk relasi)
   const isSchoolRequired = sourceChannel === 'sekolah';
   if (!data.nama_lengkap || (!data.no_wa && !data.bsuid) || (isSchoolRequired && !data.id_sekolah) || !data.minat_awal || !data.rencana_lulus) {
     throw new Error('Data tidak lengkap (nama, kontak (wa/bsuid), minat, dan rencana lulus wajib diisi. Pilihan sekolah wajib untuk jalur Kunjungan Sekolah).');
+  }
+  if (sourceChannel === 'relasi' && (!sourceDetail || !String(sourceDetail).trim())) {
+    throw new Error('Untuk calon Jalur Relasi (relasi), detail sumber (nama alumni atau relasi perekomendasi) wajib diisi.');
   }
 
   // ── Validasi Kuota Ingestion ──
@@ -473,9 +485,109 @@ async function tambahSiswa(data, user) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/siswa/:id/graduate — Kelulusan Siswa (Core Service Completed ➔ POST_CUSTOMER)
+// ─────────────────────────────────────────────────────────────────────────────
+async function graduateSiswa(id, data = {}, user) {
+  let mp = user.selectedPeriod;
+  if (!mp || mp === '-') mp = await getActivePeriod();
+
+  const [periodeRows] = await pool.query(
+    "SELECT * FROM siswa_periode WHERE id_siswa = ? AND marketing_period = ?",
+    [id, mp]
+  );
+  if (periodeRows.length === 0) throw new Error('Siswa tidak terdaftar di periode aktif ini.');
+
+  const prevStatus = periodeRows[0].status_terkini;
+  const prevCommercialState = periodeRows[0].commercial_state;
+  const cro = periodeRows[0].cro || user.nama;
+  const rawLevel = (data.relationship_level || 'STANDARD').toUpperCase();
+  const validLevels = ['STANDARD', 'LOYAL', 'ADVOCATE'];
+  const finalLevel = validLevels.includes(rawLevel) ? rawLevel : 'STANDARD';
+  const catatan = data.catatan || 'Siswa telah menyelesaikan program pelatihan / penempatan kerja secara resmi.';
+  const nextAction = data.next_action || 'Relasi Alumni / Referral Program';
+  const actor = user.nama || 'System';
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // 1. Update siswa_periode ke POST_CUSTOMER & Alumni
+    await conn.query(`
+      UPDATE siswa_periode 
+      SET status_terkini = 'Alumni',
+          commercial_state = 'POST_CUSTOMER',
+          relationship_level = ?,
+          next_action = ?,
+          due_date = NULL,
+          last_updated = NOW()
+      WHERE id_siswa = ? AND marketing_period = ?
+    `, [finalLevel, nextAction, id, mp]);
+
+    // 2. Update master_siswa
+    await conn.query(`
+      UPDATE master_siswa
+      SET relationship_level = ?, last_updated = NOW()
+      WHERE id_siswa = ?
+    `, [finalLevel, id]);
+
+    // 3. Insert immutable event CoreServiceCompleted ke events_log
+    const eventId = `EVT-GRAD-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    const payloadGrad = {
+      id_siswa: id,
+      previous_state: prevCommercialState,
+      new_state: 'POST_CUSTOMER',
+      relationship_level: finalLevel,
+      catatan,
+      graduated_by: actor,
+      marketing_period: mp
+    };
+    await conn.query(`
+      INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, marketing_period, created_at)
+      VALUES (?, 'student', ?, 'CoreServiceCompleted', ?, ?, ?, NOW())
+    `, [eventId, id, JSON.stringify(payloadGrad), actor, mp]);
+
+    // 4. Catat riwayat ke aktivitas_siswa
+    const [sekRows] = await conn.query(
+      'SELECT sek.nama_sekolah FROM master_siswa ms LEFT JOIN master_sekolah sek ON sek.id_sekolah = ms.id_sekolah WHERE ms.id_siswa = ?',
+      [id]
+    );
+    const idSekolahNama = sekRows[0]?.nama_sekolah || null;
+
+    await conn.query(`
+      INSERT INTO aktivitas_siswa 
+        (marketing_period, tanggal, id_siswa, id_sekolah_nama, jenis_aktivitas, hasil_aktivitas, status_sebelum, status_sesudah, next_action, catatan, pj_cro, event_type, channel)
+      VALUES (?, CURDATE(), ?, ?, 'Kelulusan / Selesai Pelatihan', 'Core Relationship Completed', ?, 'Alumni', ?, ?, ?, 'CoreServiceCompleted', 'System')
+    `, [mp, id, idSekolahNama, prevStatus, nextAction, catatan, cro]);
+
+    // 5. Sinkronisasi Read-Model Projection (student_current_state)
+    await syncStudentCurrentState(conn, [id]);
+
+    await conn.commit();
+    return {
+      success: true,
+      id_siswa: id,
+      commercial_state: 'POST_CUSTOMER',
+      status_terkini: 'Alumni',
+      relationship_level: finalLevel,
+      message: 'Siswa berhasil ditandai sebagai Alumni (POST_CUSTOMER).'
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PUT /api/v1/siswa/:id — Edit Master Siswa
 // ─────────────────────────────────────────────────────────────────────────────
 async function editSiswa(id, data, user) {
+  // Delegasi otomatis jika aksi adalah penandaan kelulusan (CUSTOMER ➔ POST_CUSTOMER / Alumni)
+  if (data.status_sesudah === 'Alumni' || data.status_sesudah === 'POST_CUSTOMER' || data.commercial_state === 'POST_CUSTOMER') {
+    return graduateSiswa(id, data, user);
+  }
+
   if (user.role === 'CRO') throw new Error('Hanya Admin/Manager yang bisa mengedit biodata master siswa.');
 
   // Check
@@ -505,10 +617,11 @@ async function editSiswa(id, data, user) {
     const targetDetail = data.source_detail !== undefined ? (data.source_detail || null) : rows[0].source_detail;
     const targetLayanan = data.kebutuhan_layanan !== undefined ? (data.kebutuhan_layanan || null) : rows[0].kebutuhan_layanan;
     const targetAlamat = data.alamat !== undefined ? (data.alamat || null) : rows[0].alamat;
+    const targetRelLevel = data.relationship_level ? String(data.relationship_level).toUpperCase() : (rows[0].relationship_level || 'STANDARD');
 
     await conn.query(`
       UPDATE master_siswa SET 
-        nama_lengkap = ?, wa = ?, bsuid = ?, id_sekolah = ?, source_channel = ?, source_detail = ?, kebutuhan_layanan = ?, alamat = ?, kelas_id = ?, minat_awal = ?, rencana_lulus = ?
+        nama_lengkap = ?, wa = ?, bsuid = ?, id_sekolah = ?, source_channel = ?, source_detail = ?, kebutuhan_layanan = ?, alamat = ?, kelas_id = ?, minat_awal = ?, rencana_lulus = ?, relationship_level = ?
       WHERE id_siswa = ?
     `, [
       data.nama_lengkap || rows[0].nama_lengkap,
@@ -522,19 +635,32 @@ async function editSiswa(id, data, user) {
       kelasId,
       data.minat_awal || rows[0].minat_awal,
       data.rencana_lulus || rows[0].rencana_lulus,
+      targetRelLevel,
       id
     ]);
 
+    let mp = user.selectedPeriod;
+    if (!mp || mp === '-') mp = await getActivePeriod();
+
+    const spUpdates = [];
+    const spParams = [];
     if (data.pj_cro) {
-      let mp = user.selectedPeriod;
-      if (!mp || mp === '-') mp = await getActivePeriod();
-      await conn.query("UPDATE siswa_periode SET cro = ?, prioritas = ? WHERE id_siswa = ? AND marketing_period = ?", [data.pj_cro, prioritasBaru, id, mp]);
+      spUpdates.push('cro = ?', 'prioritas = ?');
+      spParams.push(data.pj_cro, prioritasBaru);
+    }
+    if (data.relationship_level) {
+      spUpdates.push('relationship_level = ?');
+      spParams.push(targetRelLevel);
+    }
+    if (spUpdates.length > 0) {
+      spParams.push(id, mp);
+      await conn.query(`UPDATE siswa_periode SET ${spUpdates.join(', ')} WHERE id_siswa = ? AND marketing_period = ?`, spParams);
     }
 
     await syncStudentCurrentState(conn, [id]);
 
     await conn.commit();
-    return { id, prioritas: prioritasBaru };
+    return { id, prioritas: prioritasBaru, relationship_level: targetRelLevel };
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -620,6 +746,10 @@ async function inputAktivitas(id, data, user) {
       commercialStateUpdate = ", commercial_state = 'PROSPECT'";
     } else if (['Calon Prospek', 'Siswa Hangat', 'Kontak Hangat', 'LEAD'].includes(statusSesudah)) {
       commercialStateUpdate = ", commercial_state = 'LEAD'";
+    } else if (['Data Masuk', 'Siswa Teridentifikasi', 'Kontak Teridentifikasi', 'KNOWN_PROFILE'].includes(statusSesudah)) {
+      commercialStateUpdate = ", commercial_state = 'KNOWN_PROFILE'";
+    } else if (['Audience', 'Siswa Dingin', 'Kontak Dingin', 'AUDIENCE'].includes(statusSesudah)) {
+      commercialStateUpdate = ", commercial_state = 'AUDIENCE'";
     }
 
     await conn.query(`
@@ -725,7 +855,9 @@ async function importBatch(dataBatch, croName, user) {
     await conn.beginTransaction();
 
     for (const row of dataBatch) {
-      if (!row.nama_lengkap || (!row.no_wa && !row.bsuid) || !row.id_sekolah) {
+      const rowChannel = (row.source_channel || row.sourceChannel || row.channel || 'sekolah').toLowerCase();
+      const isSchoolRequired = rowChannel === 'sekolah';
+      if (!row.nama_lengkap || (!row.no_wa && !row.bsuid) || (isSchoolRequired && !row.id_sekolah)) {
         skipCount++; continue;
       }
       const waClean = cleanPhone(row.no_wa);
@@ -778,7 +910,6 @@ async function importBatch(dataBatch, croName, user) {
       // Consent Engine: cek apakah kolom consent_wa ada
       const isConsent = row.consent_wa === true || row.consent_wa === 'true' || row.consent_wa === 'Ya' || row.opt_in_wa === 'Ya';
       const optIn = isConsent ? 'Ya' : 'Belum';
-      const rowChannel = (row.source_channel || row.sourceChannel || row.channel || 'sekolah').toLowerCase();
       const rowDetail = row.source_detail || row.sourceDetail || row.detail || null;
       const rowLayanan = row.kebutuhan_layanan || row.kebutuhanLayanan || row.layanan || null;
 
@@ -1219,7 +1350,7 @@ async function logDecisionConsultation(id, data, user) {
 
   const pjCro = user.role === 'CRO' ? user.nama : (data.pj_cro || siswa.cro || user.nama);
 
-  let newState = siswa.commercial_state || 'Prospect';
+  let newState = normalizeLifecycleState(siswa.commercial_state) || 'PROSPECT';
   let newStatus = siswa.status_terkini;
   let eventType = 'DecisionConsultationCompleted';
   let hasilAktivitas = '';
@@ -1441,7 +1572,7 @@ async function getProspectsForConsultation(user, query = {}) {
 
   const whereParts = [
     'sp.marketing_period = ?',
-    "sp.commercial_state IN ('Prospect', 'Lead', 'Opportunity', 'PROSPECT', 'LEAD', 'OPPORTUNITY')"
+    "sp.commercial_state IN ('PROSPECT', 'LEAD', 'OPPORTUNITY', 'Prospect', 'Lead', 'Opportunity')"
   ];
   const params = [mp];
 
@@ -1473,7 +1604,7 @@ async function getProspectsForConsultation(user, query = {}) {
     LEFT JOIN master_kelas mk ON ms.kelas_id = mk.id
     LEFT JOIN master_sekolah sek ON ms.id_sekolah = sek.id_sekolah
     WHERE ${where}
-    ORDER BY sp.commercial_state IN ('Prospect', 'PROSPECT') DESC, ms.nama_lengkap ASC
+    ORDER BY sp.commercial_state IN ('PROSPECT', 'Prospect') DESC, ms.nama_lengkap ASC
     LIMIT 100
   `;
 
@@ -1568,6 +1699,7 @@ module.exports = {
   listHomeVisits,
   getProspectsForConsultation,
   getOrCreateRegistrationToken,
+  graduateSiswa,
   syncStudentCurrentState,
 };
 

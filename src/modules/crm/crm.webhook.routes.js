@@ -250,13 +250,23 @@ async function handleIncomingMessage(msg, contactMeta) {
     let idSiswa = null;
 
     if (convRows.length === 0) {
-      // Coba cari siswa berdasarkan no_wa (prioritaskan yang pertama didaftarkan)
-      const [siswaRows] = await conn.query(
-        'SELECT id_siswa, nama_lengkap FROM master_siswa WHERE no_wa = ? ORDER BY id_siswa ASC LIMIT 1',
-        [phoneClean]
-      );
-      const siswa = siswaRows[0] || null;
-      idSiswa     = siswa ? siswa.id_siswa : null;
+      // Coba cari siswa — prioritaskan BSUID (jika tersedia), fallback ke wa / no_wa
+      let siswa = null;
+      if (msg.from && msg.from.length > 15) {
+        const [bsRows] = await conn.query(
+          'SELECT id_siswa, nama_lengkap FROM master_siswa WHERE bsuid = ? LIMIT 1',
+          [msg.from]
+        );
+        siswa = bsRows[0] || null;
+      }
+      if (!siswa) {
+        const [waRows] = await conn.query(
+          'SELECT id_siswa, nama_lengkap FROM master_siswa WHERE (wa = ? OR no_wa = ?) ORDER BY id_siswa ASC LIMIT 1',
+          [phoneClean, phoneClean]
+        );
+        siswa = waRows[0] || null;
+      }
+      idSiswa = siswa ? siswa.id_siswa : null;
 
       const [insertConv] = await conn.query(
         `INSERT INTO conversations
@@ -278,6 +288,21 @@ async function handleIncomingMessage(msg, contactMeta) {
     } else {
       convId  = convRows[0].conv_id;
       idSiswa = convRows[0].id_siswa;
+
+      // GAP-BE4-10: Jika percakapan sebelumnya orphan (id_siswa NULL), coba tautkan ke master_siswa
+      if (!idSiswa) {
+        const [stRows] = await conn.query(
+          'SELECT id_siswa, nama_lengkap FROM master_siswa WHERE (wa = ? OR no_wa = ?) OR bsuid = ? ORDER BY id_siswa ASC LIMIT 1',
+          [phoneClean, phoneClean, msg.from]
+        );
+        if (stRows.length > 0) {
+          idSiswa = stRows[0].id_siswa;
+          await conn.query(
+            'UPDATE conversations SET id_siswa = ?, student_name = ? WHERE conv_id = ?',
+            [idSiswa, stRows[0].nama_lengkap, convId]
+          );
+        }
+      }
     }
 
     // 2. Insert pesan — IDEMPOTENT (tolak duplikat dari Meta retry)
@@ -321,6 +346,15 @@ async function handleIncomingMessage(msg, contactMeta) {
          updated_date     = NOW()`,
       [phoneClean, idSiswa]
     );
+
+    // 5. Bind BSUID jika pesan datang dari identifier yang bukan nomor WA biasa
+    if (msg.from && idSiswa) {
+      await conn.query(
+        `UPDATE master_siswa SET bsuid = ?
+         WHERE id_siswa = ? AND (bsuid IS NULL OR bsuid = '')`,
+        [msg.from, idSiswa]
+      ).catch(() => {});
+    }
 
     // ── Payment Proof & Transfer Confirmation Detection (Evidence Layer) ────
     const isImage = msgType === 'image';
@@ -372,13 +406,32 @@ async function handleIncomingMessage(msg, contactMeta) {
       ).catch(e => console.warn('[Webhook:Legacy] events_log PaymentProofSubmitted error:', e.message));
 
       if (idSiswa) {
+        // GAP-BE4-04: Ambil status aktual siswa saat ini
+        const [[curSt]] = await conn.query(
+          'SELECT commercial_state, status_terkini FROM siswa_periode WHERE id_siswa = ? ORDER BY COALESCE(last_updated, created_date) DESC, id_record DESC LIMIT 1',
+          [idSiswa]
+        );
+        const curCommState = curSt?.commercial_state ? String(curSt.commercial_state).toUpperCase().trim() : 'OPPORTUNITY';
+        const isCoreConversionProof = curCommState === 'REGISTERED' || (curSt?.status_terkini || '').includes('Terdaftar');
+
+        const proofLabel = isCoreConversionProof
+          ? 'Bukti Transfer DP Core Pelatihan Dikirim'
+          : 'Bukti Transfer Formulir Pendaftaran Dikirim';
+        const proofCatatan = isCoreConversionProof
+          ? `Siswa mengirimkan bukti transfer DP Pelatihan Inti (Core Conversion) via WhatsApp${mediaId ? ' (Lampiran Foto)' : ''}. Menunggu verifikasi tim Finance/Admin.`
+          : `Siswa mengirimkan bukti transfer Formulir Pendaftaran (Registration Conversion) via WhatsApp${mediaId ? ' (Lampiran Foto)' : ''}. Menunggu verifikasi tim Finance/Admin.`;
+        const stSebelum = curSt?.status_terkini || (isCoreConversionProof ? 'Siswa Terdaftar' : 'Konsultasi');
+
         await conn.query(
           `INSERT INTO aktivitas_siswa 
              (tanggal, id_siswa, jenis_aktivitas, hasil_aktivitas, status_sebelum, status_sesudah, catatan, event_type, channel)
-           VALUES (CURDATE(), ?, 'Bukti Transfer Dikirim', 'Menunggu Verifikasi', 'Opportunity', 'Opportunity', ?, 'PaymentProofSubmitted', 'WhatsApp')`,
+           VALUES (CURDATE(), ?, ?, 'Menunggu Verifikasi', ?, ?, ?, 'PaymentProofSubmitted', 'WhatsApp')`,
           [
             idSiswa,
-            `Siswa mengirimkan bukti transfer via WhatsApp${mediaId ? ' (Lampiran Foto)' : ''}. Menunggu verifikasi tim Finance/Admin.`
+            proofLabel,
+            stSebelum,
+            stSebelum,
+            proofCatatan
           ]
         ).catch(e => console.warn('[Webhook:Legacy] aktivitas_siswa error:', e.message));
       }
@@ -387,6 +440,18 @@ async function handleIncomingMessage(msg, contactMeta) {
     // 6. State Machine: Respons Snooze, Consent Withdrawn, atau Positive Wakeup
     if (idSiswa && body) {
       const lowerBody = body.toLowerCase().trim();
+
+      const [[currentStudentRecord]] = await conn.query(
+        `SELECT commercial_state, status_terkini FROM siswa_periode 
+         WHERE id_siswa = ? 
+         ORDER BY COALESCE(last_updated, created_date) DESC, id_record DESC 
+         LIMIT 1`,
+        [idSiswa]
+      );
+      const rawCurrentState = currentStudentRecord?.commercial_state || 'KNOWN_PROFILE';
+      const curStateNormalized = rawCurrentState.toUpperCase().trim();
+      const isPostRegistration = ['REGISTERED', 'CUSTOMER', 'POST_CUSTOMER'].includes(curStateNormalized);
+      const isCustomerOrPost = ['CUSTOMER', 'POST_CUSTOMER'].includes(curStateNormalized);
 
       // Case A: Penolakan / Pencabutan Izin WhatsApp (Consent Withdrawn)
       if (
@@ -407,22 +472,27 @@ async function handleIncomingMessage(msg, contactMeta) {
           `UPDATE siswa_nurturing_state SET is_in_campaign = 0, snooze_until = NULL, updated_at = NOW() WHERE id_siswa = ?`,
           [idSiswa]
         );
-        await conn.query(
-          `UPDATE siswa_periode SET status_terkini = 'Tidak Lanjut', commercial_state = 'Disqualified', next_action = 'Tidak Ada', alasan_tidak_lanjut = 'Consent Withdrawn' WHERE id_siswa = ?`,
-          [idSiswa]
-        );
+
+        // GAP-BE4-02: Jangan diskualifikasi jika sudah CUSTOMER atau POST_CUSTOMER (Alumni)
+        if (!isCustomerOrPost) {
+          await conn.query(
+            `UPDATE siswa_periode SET status_terkini = 'Tidak Lanjut', commercial_state = 'Disqualified', next_action = 'Tidak Ada', alasan_tidak_lanjut = 'Consent Withdrawn' WHERE id_siswa = ?`,
+            [idSiswa]
+          );
+        }
+
         const eventId = `EVT-WH-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
         await conn.query(
           `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
            VALUES (?, 'siswa', ?, 'SnoozeAborted', ?, 'System/Webhook', NOW())`,
-          [eventId, idSiswa, JSON.stringify({ id_siswa: idSiswa, reason: 'Consent Withdrawn', raw_message: body })]
+          [eventId, idSiswa, JSON.stringify({ id_siswa: idSiswa, reason: 'Consent Withdrawn', raw_message: body, preserved_state: isCustomerOrPost ? curStateNormalized : 'Disqualified' })]
         );
         await conn.query(
           `INSERT INTO nurturing_activity_log (id_siswa, activity_type, result, notes, triggered_by)
            VALUES (?, 'Consent Withdrawn', 'Opt-Out via WA', ?, 'webhook')`,
           [idSiswa, `Siswa membalas: "${body}". Izin dicabut, kampanye dihentikan.`]
         );
-        console.log(`[Webhook:Legacy] Consent Withdrawn untuk siswa: ${idSiswa}`);
+        console.log(`[Webhook:Legacy] Consent Withdrawn untuk siswa: ${idSiswa} (Preserved: ${isCustomerOrPost ? 'YES' : 'NO'})`);
       }
       // Case B: Pemicu Snooze Otomatis (SnoozeRequested — Interval Default 90 Hari)
       else if (
@@ -445,22 +515,27 @@ async function handleIncomingMessage(msg, contactMeta) {
           `UPDATE siswa_nurturing_state SET is_in_campaign = 0, snooze_until = ?, snooze_level = 0, updated_at = NOW() WHERE id_siswa = ?`,
           [snoozeDate, idSiswa]
         );
-        await conn.query(
-          `UPDATE siswa_periode SET status_terkini = 'Data Masuk', commercial_state = 'KNOWN_PROFILE', next_action = 'Snooze', due_date = NULL WHERE id_siswa = ?`,
-          [idSiswa]
-        );
+
+        // GAP-BE4-03: Hanya set ke KNOWN_PROFILE jika siswa berada pada tahap pra-konversi
+        if (!isPostRegistration) {
+          await conn.query(
+            `UPDATE siswa_periode SET status_terkini = 'Data Masuk', commercial_state = 'KNOWN_PROFILE', next_action = 'Snooze', due_date = NULL WHERE id_siswa = ?`,
+            [idSiswa]
+          );
+        }
+
         const eventId = `EVT-WH-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
         await conn.query(
           `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
            VALUES (?, 'siswa', ?, 'SnoozeRequested', ?, 'System/Webhook', NOW())`,
-          [eventId, idSiswa, JSON.stringify({ id_siswa: idSiswa, interval_days: 90, snooze_until: snoozeUntilStr, trigger: 'webhook', reason: body })]
+          [eventId, idSiswa, JSON.stringify({ id_siswa: idSiswa, interval_days: 90, snooze_until: snoozeUntilStr, trigger: 'webhook', reason: body, preserved_state: isPostRegistration ? curStateNormalized : 'KNOWN_PROFILE' })]
         );
         await conn.query(
           `INSERT INTO nurturing_activity_log (id_siswa, activity_type, result, notes, triggered_by)
            VALUES (?, 'Auto Snooze Webhook', 'Snooze 90 Hari', ?, 'webhook')`,
           [idSiswa, `Siswa merespons: "${body}". Dijadwalkan bangun pada ${snoozeUntilStr}.`]
         );
-        console.log(`[Webhook:Legacy] SnoozeRequested (90 hari) untuk siswa: ${idSiswa}`);
+        console.log(`[Webhook:Legacy] SnoozeRequested (90 hari) untuk siswa: ${idSiswa} (Preserved: ${isPostRegistration ? curStateNormalized : 'NONE'})`);
       }
       // Case C: Respons Intensi Positif / Bertanya di Tengah Masa Tunggu (SnoozeAborted: Woke Up)
       else if (
@@ -478,22 +553,45 @@ async function handleIncomingMessage(msg, contactMeta) {
           `UPDATE siswa_nurturing_state SET is_in_campaign = 0, snooze_until = NULL, updated_at = NOW() WHERE id_siswa = ?`,
           [idSiswa]
         );
-        await conn.query(
-          `UPDATE siswa_periode SET next_action = 'Follow Up', due_date = NOW() WHERE id_siswa = ?`,
-          [idSiswa]
-        );
-        const eventId = `EVT-WH-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-        await conn.query(
-          `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
-           VALUES (?, 'siswa', ?, 'SnoozeAborted', ?, 'System/Webhook', NOW())`,
-          [eventId, idSiswa, JSON.stringify({ id_siswa: idSiswa, reason: 'Woke Up', trigger: 'inbound_interest', raw_message: body })]
-        );
-        await conn.query(
-          `INSERT INTO nurturing_activity_log (id_siswa, activity_type, result, notes, triggered_by)
-           VALUES (?, 'Webhook Handoff', 'Woke Up by User Reply', ?, 'system')`,
-          [idSiswa, `Siswa merespons minat: "${body}". Snooze dihentikan dan diserahkan ke CRO.`]
-        );
-        console.log(`[Webhook:Legacy] Snooze Woke Up untuk siswa: ${idSiswa} (Respons: ${body})`);
+
+        // GAP-BE4-01: GUARD STATE MUTATION
+        // Update ke LEAD hanya jika siswa saat ini KNOWN_PROFILE, AUDIENCE, atau Disqualified
+        // JANGAN PERNAH downgrade entitas PROSPECT, OPPORTUNITY, REGISTERED, CUSTOMER, atau POST_CUSTOMER!
+        const canTransitionToLead = ['KNOWN_PROFILE', 'KNOWN', 'AUDIENCE', 'DISQUALIFIED'].includes(curStateNormalized) ||
+                                    (currentStudentRecord?.status_terkini || '').includes('Data Masuk') ||
+                                    (currentStudentRecord?.status_terkini || '').includes('Tidak Lanjut');
+
+        if (canTransitionToLead) {
+          await conn.query(
+            `UPDATE siswa_periode 
+             SET commercial_state = 'LEAD', 
+                 status_terkini = 'Calon Prospek', 
+                 next_action = 'Follow Up', 
+                 due_date = NOW(),
+                 last_updated = NOW() 
+             WHERE id_siswa = ?`,
+            [idSiswa]
+          );
+          const eventId = `EVT-WH-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+          await conn.query(
+            `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, created_at)
+             VALUES (?, 'siswa', ?, 'StateTransitionedToLead', ?, 'System/Webhook', NOW())`,
+            [eventId, idSiswa, JSON.stringify({ id_siswa: idSiswa, reason: 'Woke Up with Positive Interest', previous_state: curStateNormalized, new_state: 'LEAD', trigger: 'inbound_interest', raw_message: body })]
+          );
+          await conn.query(
+            `INSERT INTO nurturing_activity_log (id_siswa, activity_type, result, notes, triggered_by)
+             VALUES (?, 'Webhook Handoff', 'Woke Up by User Reply', ?, 'system')`,
+            [idSiswa, `Siswa merespons minat: "${body}". Snooze dihentikan dan diserahkan ke CRO.`]
+          );
+        } else {
+          // Entitas sudah berada di tahap PROSPECT/OPPORTUNITY/REGISTERED/CUSTOMER/POST_CUSTOMER
+          // Cukup catat interaksi pesan tanpa mengubah atau mendowngrade status komersial mereka
+          await conn.query(
+            `UPDATE siswa_periode SET last_updated = NOW() WHERE id_siswa = ?`,
+            [idSiswa]
+          );
+        }
+        console.log(`[Webhook:Legacy] Snooze Woke Up untuk siswa: ${idSiswa} (Respons: ${body}, Transitioned: ${canTransitionToLead ? 'YES' : 'GUARDED_PRESERVED'})`);
       }
       await syncStudentCurrentState(conn, [idSiswa]);
     }

@@ -147,7 +147,15 @@ async function testConnection() {
               sp.id_siswa,
               ms.nama_lengkap,
               sp.cro,
-              COALESCE(sp.commercial_state, 'Lead'),
+              CASE UPPER(TRIM(COALESCE(NULLIF(sp.commercial_state, ''), 'KNOWN_PROFILE')))
+                WHEN 'KNOWN' THEN 'KNOWN_PROFILE'
+                WHEN 'REGISTERED OPPORTUNITY' THEN 'REGISTERED'
+                WHEN 'REGISTERED_OPPORTUNITY' THEN 'REGISTERED'
+                WHEN 'TERDAFTAR FORMULIR' THEN 'REGISTERED'
+                WHEN 'ALUMNI' THEN 'POST_CUSTOMER'
+                WHEN 'MANTAN PELANGGAN' THEN 'POST_CUSTOMER'
+                ELSE UPPER(TRIM(COALESCE(NULLIF(sp.commercial_state, ''), 'KNOWN_PROFILE')))
+              END,
               sp.status_terkini,
               sp.marketing_period,
               COALESCE(sp.last_updated, sp.created_date, NOW())
@@ -191,6 +199,39 @@ async function testConnection() {
           }
         } catch (eMs) {
           console.warn(`[Auto-Migrate] master_siswa multi-channel error in ${config.db_name}:`, eMs.message);
+        }
+
+        // 5. Auto-Migrate: relationship_level (Dimensi Perilaku: STANDARD, LOYAL, ADVOCATE - Bagian 6 Ontologi v2)
+        try {
+          const [msRl] = await tPool.query("SHOW COLUMNS FROM master_siswa LIKE 'relationship_level'");
+          if (msRl.length === 0) {
+            await tPool.query("ALTER TABLE master_siswa ADD COLUMN relationship_level ENUM('STANDARD', 'LOYAL', 'ADVOCATE') NOT NULL DEFAULT 'STANDARD';");
+            console.log(`✅ Auto-Migrate: Added relationship_level to master_siswa in ${config.db_name}`);
+          }
+          const [spRl] = await tPool.query("SHOW COLUMNS FROM siswa_periode LIKE 'relationship_level'");
+          if (spRl.length === 0) {
+            await tPool.query("ALTER TABLE siswa_periode ADD COLUMN relationship_level ENUM('STANDARD', 'LOYAL', 'ADVOCATE') NOT NULL DEFAULT 'STANDARD';");
+            console.log(`✅ Auto-Migrate: Added relationship_level to siswa_periode in ${config.db_name}`);
+          }
+          const [scsRl] = await tPool.query("SHOW COLUMNS FROM student_current_state LIKE 'relationship_level'");
+          if (scsRl.length === 0) {
+            await tPool.query("ALTER TABLE student_current_state ADD COLUMN relationship_level VARCHAR(20) NOT NULL DEFAULT 'STANDARD';");
+            console.log(`✅ Auto-Migrate: Added relationship_level to student_current_state in ${config.db_name}`);
+          }
+        } catch (eRl) {
+          console.warn(`[Auto-Migrate] relationship_level error in ${config.db_name}:`, eRl.message);
+        }
+
+        // 6. Self-Healing: wa_templates pipeline alignment (REGISTERED_OPPORTUNITY / REGISTRASI -> REGISTERED)
+        try {
+          const [resTmpl] = await tPool.query(
+            "UPDATE wa_templates SET pipeline = 'REGISTERED' WHERE pipeline = 'REGISTERED_OPPORTUNITY' OR pipeline = 'REGISTRASI';"
+          );
+          if (resTmpl.affectedRows > 0) {
+            console.log(`✅ Self-Healing: Cleaned ${resTmpl.affectedRows} legacy pipeline values in wa_templates for ${config.db_name}`);
+          }
+        } catch (eTmpl) {
+          // Table wa_templates might not exist yet in fresh database
         }
       }
     } catch(err) {

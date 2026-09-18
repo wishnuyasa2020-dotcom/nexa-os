@@ -45,7 +45,7 @@ async function getAudience(user, query = {}) {
   const offset = (page - 1) * limit;
   const search = query.search || '';
   const status = query.statusPipeline || '';
-  const commercialState = query.commercialState || '';
+  const commercialState = query.commercialState || query.lifecycle_state || '';
   const schoolId = query.schoolId || query.id_sekolah || '';
 
   let mp = query.period || user.selectedPeriod;
@@ -126,7 +126,11 @@ async function getAudience(user, query = {}) {
   `;
 
   const [rows] = await pool.query(dataSql, [...params, limit, offset]);
-  const data = rows.map(r => ({ ...r, isSwOpen: r.isSwOpen === 1 }));
+  const data = rows.map(r => ({
+    ...r,
+    lifecycle_state: normalizeLifecycleState(r.commercialState),
+    isSwOpen: r.isSwOpen === 1
+  }));
 
   return {
     data,

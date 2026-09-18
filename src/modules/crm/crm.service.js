@@ -1,6 +1,7 @@
 'use strict';
 
 const { pool } = require('../../config/database');
+const { normalizeLifecycleState } = require('./lifecycle.constants');
 
 /**
  * Nexa OS — CRM Service
@@ -640,7 +641,7 @@ async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All'
           CASE UPPER(TRIM(sp.commercial_state))
             WHEN 'KNOWN' THEN 'Known Profile'
             WHEN 'KNOWN_PROFILE' THEN 'Known Profile'
-            WHEN 'AUDIENCE' THEN 'Known Profile'
+            WHEN 'AUDIENCE' THEN 'Audience'
             WHEN 'LEAD' THEN 'Lead'
             WHEN 'PROSPECT' THEN 'Prospect'
             WHEN 'OPPORTUNITY' THEN 'Opportunity'
@@ -652,6 +653,7 @@ async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All'
           END
         ELSE
           CASE sp.status_terkini
+            WHEN 'Audience' THEN 'Audience'
             WHEN 'Data Masuk' THEN 'Known Profile'
             WHEN 'Calon Prospek' THEN 'Lead'
             WHEN 'Prospek Aktif' THEN 'Prospect'
@@ -679,10 +681,16 @@ async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All'
   const funnelSiswaMap = {};
   siswaRows.forEach(r => funnelSiswaMap[r.pipeline_stage] = parseInt(r.cnt, 10));
   
-  const ONTOLOGY_STAGES = ['Known Profile', 'Lead', 'Prospect', 'Opportunity', 'Registered', 'Customer'];
-  if (funnelSiswaMap['Post-Customer'] && funnelSiswaMap['Post-Customer'] > 0) {
-    ONTOLOGY_STAGES.push('Post-Customer');
-  }
+  const ONTOLOGY_STAGES = [
+    'Audience',
+    'Known Profile',
+    'Lead',
+    'Prospect',
+    'Opportunity',
+    'Registered',
+    'Customer',
+    'Post-Customer'
+  ];
   const funnelSiswa = ONTOLOGY_STAGES.map(stage => ({
     status: stage,
     count: funnelSiswaMap[stage] || 0
@@ -1085,12 +1093,14 @@ async function getTaskList(category, period, user) {
   });
 
   rowsSiswa.forEach(row => {
+    const rawState = row.commercial_state || row.status_terkini || '';
     tasks.push({
       tipe: 'siswa',
       id: String(row.id_siswa || ''),
       nama: String(row.nama_lengkap || ''),
       status: String(row.status_terkini || ''),
-      commercialState: String(row.commercial_state || row.status_terkini || ''),
+      commercialState: String(rawState),
+      lifecycle_state: normalizeLifecycleState(rawState),
       intent: String(row.intent || row.prioritas || ''),
       priorityScore: Number(row.priority_score || 0),
       nextAction: String(row.next_action || ''),
@@ -1116,6 +1126,7 @@ async function getTaskList(category, period, user) {
       nama: idSiswaNama,
       status: String(row.status_terkini || ''),
       commercialState: 'Opportunity',
+      lifecycle_state: 'OPPORTUNITY',
       intent: String(row.prioritas || ''),
       nextAction: String(row.next_action || ''),
       dueDate: String(row.dueDate || ''),
@@ -1229,6 +1240,7 @@ async function getWeeklyPlanningData(startDate, endDate, period, user) {
       IFNULL(sp.due_date, '') as due_date,
       IFNULL(sp.catatan, '') as catatan,
       IFNULL(sp.status_terkini, '') as status_terkini,
+      IFNULL(sp.commercial_state, '') as commercial_state,
       IFNULL(sp.status_jadwal, '') as status_jadwal
     FROM siswa_periode sp
     LEFT JOIN master_siswa ms ON sp.id_siswa = ms.id_siswa
@@ -1347,6 +1359,7 @@ async function getWeeklyPlanningData(startDate, endDate, period, user) {
   });
 
   rowsSiswa.forEach(row => {
+    const rawState = row.commercial_state || row.status_terkini || '';
     items.push({
       id: 'task-sis-' + row.id_siswa,
       refId: row.id_siswa,
@@ -1362,6 +1375,8 @@ async function getWeeklyPlanningData(startDate, endDate, period, user) {
       cro: row.cro,
       catatan: row.catatan,
       status: row.status_terkini,
+      commercialState: rawState,
+      lifecycle_state: normalizeLifecycleState(rawState),
       statusJadwal: row.status_jadwal
     });
   });
@@ -1383,6 +1398,8 @@ async function getWeeklyPlanningData(startDate, endDate, period, user) {
       cro: row.cro,
       catatan: row.catatan,
       status: row.status_terkini,
+      commercialState: 'Opportunity',
+      lifecycle_state: 'OPPORTUNITY',
       statusJadwal: row.status_jadwal
     });
   });

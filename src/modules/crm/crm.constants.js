@@ -62,6 +62,8 @@ const STATUS_SISWA = [
   'Home Visit',
   'Siap Daftar',
   'Terdaftar',
+  'Lunas DP',
+  'Alumni',
   'Tidak Lanjut'
 ];
 
@@ -83,6 +85,8 @@ const NEXT_ACTION_SISWA = [
   'Konsultasi (Lanjutan)',
   'Home Visit',
   'Pendaftaran',
+  'Pelatihan / Pengurusan Dokumen',
+  'Relasi Alumni / Referral Program',
   'Tidak Ada'
 ];
 
@@ -91,7 +95,10 @@ const AKTIVITAS_SISWA = [
   'Telepon',
   'Konsultasi',
   'Home Visit',
-  'Pendaftaran'
+  'Pendaftaran',
+  'Assessment FNAR',
+  'Decision Consultation',
+  'Kelulusan / Selesai Pelatihan'
 ];
 
 const HASIL_AKTIVITAS_SISWA = {
@@ -103,7 +110,11 @@ const HASIL_AKTIVITAS_SISWA = {
   'Layak Home Visit':          { status: 'Layak Home Visit', nextAction: 'Home Visit' },
   'Home Visit Selesai':        { status: 'Home Visit',       nextAction: 'Follow Up' },
   'Siap Daftar':               { status: 'Siap Daftar',      nextAction: 'Pendaftaran' },
+  'Komitmen Disetujui':        { status: 'Siap Daftar',      nextAction: 'Pendaftaran' },
   'Berhasil Daftar':           { status: 'Terdaftar',        nextAction: 'Tidak Ada' },
+  'Lunas DP Pelatihan':        { status: 'Lunas DP',         nextAction: 'Pelatihan / Pengurusan Dokumen' },
+  'Core Relationship Completed': { status: 'Alumni',         nextAction: 'Relasi Alumni / Referral Program' },
+  'Lulus Pelatihan':           { status: 'Alumni',           nextAction: 'Relasi Alumni / Referral Program' },
   'Ditunda':                   { status: 'Prospek Aktif',    nextAction: 'Follow Up' },
   'Tidak Berminat':            { status: 'Tidak Lanjut',     nextAction: 'Tidak Ada' },
   'Tidak Memenuhi Syarat':     { status: 'Tidak Lanjut',     nextAction: 'Tidak Ada' }
@@ -218,6 +229,7 @@ const HASIL_BUTUH_ALASAN_HV = [
 const ROLES = [
   'Admin',
   'Manager',
+  'Chief CRO',
   'CRO'
 ];
 

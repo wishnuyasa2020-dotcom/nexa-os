@@ -57,12 +57,23 @@ const TENANT_VOCABULARIES = Object.freeze({
 });
 
 /**
+ * Dimensi Kualitas/Perilaku Hubungan (Behavioral Dimension)
+ * Terpisah dari Lifecycle State (Bagian 6 Ontologi v2).
+ */
+const RELATIONSHIP_LEVELS = Object.freeze({
+  STANDARD: 'STANDARD',
+  LOYAL: 'LOYAL',
+  ADVOCATE: 'ADVOCATE'
+});
+
+/**
  * Normalisasi fleksibel string input/database ke nilai Canonical State.
  * Menjamin kompatibilitas dengan data warisan (legacy) seperti 'Registered Opportunity', 'Known', dll.
  */
 function normalizeLifecycleState(input) {
   if (!input) return CANONICAL_STATES.LEAD;
   const cleaned = String(input).trim().toUpperCase();
+  if (!cleaned) return CANONICAL_STATES.LEAD;
 
   switch (cleaned) {
     case 'AUDIENCE':
@@ -109,10 +120,31 @@ function getDisplayLabel(canonicalState, tenantType = 'lpk') {
   return vocab[normState] || normState;
 }
 
+/**
+ * Mendapatkan display gabungan Lifecycle State + Behavioral Dimension (Bagian 6 Ontologi v2)
+ * Contoh:
+ * - LPK: "Alumni — Advocate"
+ * - Non-LPK: "Pelanggan Loyal"
+ */
+function getCompositeDisplayLabel(canonicalState, relationshipLevel = 'STANDARD', tenantType = 'lpk') {
+  const baseLabel = getDisplayLabel(canonicalState, tenantType);
+  const level = String(relationshipLevel || 'STANDARD').toUpperCase().trim();
+
+  if (level === RELATIONSHIP_LEVELS.ADVOCATE) {
+    return tenantType === 'lpk' ? `${baseLabel} — Advocate` : `${baseLabel} Advokat`;
+  }
+  if (level === RELATIONSHIP_LEVELS.LOYAL) {
+    return tenantType === 'lpk' ? `${baseLabel} Loyal` : `${baseLabel} Loyal`;
+  }
+  return baseLabel;
+}
+
 module.exports = {
   CANONICAL_STATES,
   CANONICAL_STATE_PIPELINE,
   TENANT_VOCABULARIES,
+  RELATIONSHIP_LEVELS,
   normalizeLifecycleState,
-  getDisplayLabel
+  getDisplayLabel,
+  getCompositeDisplayLabel
 };

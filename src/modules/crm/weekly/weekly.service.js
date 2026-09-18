@@ -16,6 +16,7 @@
 
 const { pool } = require('../../../config/database');
 const { v4: uuidv4 } = require('uuid');
+const { normalizeLifecycleState } = require('../lifecycle.constants');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -193,7 +194,12 @@ async function getBacklog(user, query = {}) {
     LIMIT 100
   `, aeParams);
 
-  return [...asRows, ...asiRows, ...hvRows, ...aeRows];
+  return [...asRows, ...asiRows, ...hvRows, ...aeRows].map(r => ({
+    ...r,
+    lifecycle_state: r.commercialState
+      ? normalizeLifecycleState(r.commercialState)
+      : (r.jenis === 'home_visit' ? 'OPPORTUNITY' : null)
+  }));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

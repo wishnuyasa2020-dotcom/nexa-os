@@ -790,21 +790,27 @@ async function getTemplateLibrary() {
   );
 
   const pipelineStats = {
+    AUDIENCE: 0,
+    KNOWN_PROFILE: 0,
     LEAD: 0,
     PROSPECT: 0,
     OPPORTUNITY: 0,
+    REGISTERED: 0,
     REGISTERED_OPPORTUNITY: 0,
     CUSTOMER: 0,
+    POST_CUSTOMER: 0,
     SNOOZE: 0,
     TOTAL: templates.length
   };
 
   templates.forEach(t => {
-    const p = (t.pipeline || '').toUpperCase();
+    let p = (t.pipeline || '').toUpperCase().trim();
+    if (p === 'REGISTERED_OPPORTUNITY') p = 'REGISTERED';
     if (pipelineStats[p] !== undefined) {
       pipelineStats[p]++;
     }
   });
+  pipelineStats.REGISTERED_OPPORTUNITY = pipelineStats.REGISTERED;
 
   const [tenants] = await mainPool.query(
     `SELECT tenant_id, brand_name, tier, status FROM tenants WHERE status = 'ACTIVE' ORDER BY brand_name ASC`

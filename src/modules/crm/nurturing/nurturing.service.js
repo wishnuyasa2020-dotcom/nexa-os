@@ -9,6 +9,8 @@
 const { pool } = require('../../../config/database');
 const axios = require('axios');
 const crypto = require('crypto');
+const { syncStudentCurrentState } = require('../student.projection');
+const { normalizeLifecycleState } = require('../lifecycle.constants');
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
@@ -93,10 +95,10 @@ async function getStats(user) {
 
   const [[stats]] = await pool.query(`
     SELECT
-      COUNT(CASE WHEN sp.commercial_state IN ('Lead', 'Prospect') OR sp.status_terkini = 'Calon Prospek' THEN 1 END) AS total_calon_prospek,
+      COUNT(CASE WHEN sp.commercial_state IN ('LEAD', 'PROSPECT', 'Lead', 'Prospect') OR sp.status_terkini = 'Calon Prospek' THEN 1 END) AS total_calon_prospek,
       COUNT(CASE WHEN sn.is_in_campaign = 1 AND sn.probe_level = 0 THEN 1 END)                                     AS antrean_baru_probe_1,
       COUNT(CASE WHEN sn.is_in_campaign = 1 AND sn.probe_level BETWEEN 1 AND 4 THEN 1 END)                         AS dalam_putaran_probe_1_4,
-      COUNT(CASE WHEN (sp.commercial_state IN ('Lead', 'Prospect') OR sp.status_terkini = 'Calon Prospek')
+      COUNT(CASE WHEN (sp.commercial_state IN ('LEAD', 'PROSPECT', 'Lead', 'Prospect') OR sp.status_terkini = 'Calon Prospek')
                   AND sp.next_action = 'Follow Up'
                   AND (sn.is_in_campaign = 0 OR sn.id IS NULL)                                                     THEN 1 END) AS menunggu_followup_manual
     FROM siswa_periode sp
@@ -130,7 +132,7 @@ async function getLeads(user, query = {}) {
 
   const whereParts = [
     `sp.marketing_period = ?`,
-    `(sp.commercial_state IN ('Lead', 'Prospect') OR sp.status_terkini = 'Calon Prospek')`,
+    `(sp.commercial_state IN ('LEAD', 'PROSPECT', 'Lead', 'Prospect') OR sp.status_terkini = 'Calon Prospek')`,
     `sn.is_in_campaign   = 1`,
     `(ms.opt_in_wa IS NULL OR ms.opt_in_wa NOT IN ('Tidak', 'Denied', 'Withdrawn', 'No'))`,
   ];
@@ -157,7 +159,7 @@ async function getLeads(user, query = {}) {
        ms.nama_lengkap   AS nama,
        ms.wa             AS noWa,
        IFNULL(sek.nama_sekolah, '-') AS sekolah,
-       COALESCE(sp.commercial_state, sp.status_terkini, 'Lead') AS commercialState,
+       COALESCE(sp.commercial_state, sp.status_terkini, 'LEAD') AS commercialState,
        sp.status_terkini AS status,
        'Granted'         AS consent,
        sp.cro,
@@ -178,7 +180,7 @@ async function getLeads(user, query = {}) {
   );
 
   return {
-    data:       rows,
+    data:       rows.map(r => ({ ...r, lifecycle_state: normalizeLifecycleState(r.commercialState) })),
     total:      parseInt(total, 10),
     page,
     limit,
@@ -267,7 +269,7 @@ async function getSnoozeLeads(user, query = {}) {
        ms.nama_lengkap                     AS nama,
        ms.wa                               AS noWa,
        IFNULL(sek.nama_sekolah, '-')       AS sekolah,
-       COALESCE(sp.commercial_state, sp.status_terkini, 'Lead') AS commercialState,
+       COALESCE(sp.commercial_state, sp.status_terkini, 'LEAD') AS commercialState,
        'Granted'                           AS consent,
        sp.cro,
        COALESCE(sz.snooze_level, sn.snooze_level, 0) AS snoozeLevel,
@@ -286,7 +288,7 @@ async function getSnoozeLeads(user, query = {}) {
   );
 
   return {
-    data:       rows,
+    data:       rows.map(r => ({ ...r, lifecycle_state: normalizeLifecycleState(r.commercialState) })),
     total:      parseInt(total, 10),
     page,
     limit,
@@ -317,6 +319,7 @@ async function takeoverLead(idSiswa, user) {
      WHERE id_siswa = ? AND marketing_period = ?`,
     [idSiswa, mp]
   );
+  await syncStudentCurrentState(pool, [idSiswa]);
 
   // Rekam event immutable NurturingAborted
   await recordEvent(
@@ -464,13 +467,14 @@ async function addManualSnooze(idSiswa, optionsOrAlasan, user) {
     [idSiswa, mp, snoozeUntil]
   );
 
-  // Update status siswa ke Data Masuk
+  // Update status siswa ke Data Masuk / KNOWN_PROFILE
   await pool.query(
     `UPDATE siswa_periode
-     SET status_terkini = 'Data Masuk', next_action = 'Snooze', due_date = NULL
+     SET status_terkini = 'Data Masuk', commercial_state = 'KNOWN_PROFILE', next_action = 'Snooze', due_date = NULL
      WHERE id_siswa = ? AND marketing_period = ?`,
     [idSiswa, mp]
   );
+  await syncStudentCurrentState(pool, [idSiswa]);
 
   // 3. Rekam Event Immutable SnoozeRequested ke events_log
   await recordEvent(
@@ -529,13 +533,14 @@ async function stopSnooze(idSiswa, user) {
     [idSiswa, mp]
   );
 
-  // 2. Kembalikan status ke Data Masuk + siapkan untuk tindak lanjut CRO
+  // 2. Kembalikan status ke Data Masuk / KNOWN_PROFILE + siapkan untuk tindak lanjut CRO
   await pool.query(
     `UPDATE siswa_periode
-     SET status_terkini = 'Data Masuk', next_action = 'Follow Up', due_date = NOW()
+     SET status_terkini = 'Data Masuk', commercial_state = 'KNOWN_PROFILE', next_action = 'Follow Up', due_date = NOW()
      WHERE id_siswa = ? AND marketing_period = ?`,
     [idSiswa, mp]
   );
+  await syncStudentCurrentState(pool, [idSiswa]);
 
   // 3. Rekam Event Immutable SnoozeAborted ke events_log
   await recordEvent(
@@ -601,10 +606,11 @@ async function runNurturingCron(credentials = null) {
       );
       await pool.query(
         `UPDATE siswa_periode
-         SET status_terkini = 'Tidak Lanjut', next_action = 'Tidak Ada', alasan_tidak_lanjut = 'Consent Withdrawn'
+         SET status_terkini = 'Tidak Lanjut', commercial_state = 'Disqualified', next_action = 'Tidak Ada', alasan_tidak_lanjut = 'Consent Withdrawn'
          WHERE id_siswa = ? AND marketing_period = ?`,
         [lead.id_siswa, mp]
       );
+      await syncStudentCurrentState(pool, [lead.id_siswa]);
       await recordEvent(
         'NurturingAborted',
         lead.id_siswa,
@@ -661,6 +667,7 @@ async function runNurturingCron(credentials = null) {
          WHERE id_siswa = ? AND marketing_period = ?`,
         [lead.id_siswa, mp]
       );
+      await syncStudentCurrentState(pool, [lead.id_siswa]);
       await recordEvent(
         'NurturingCompleted',
         lead.id_siswa,
@@ -727,10 +734,11 @@ async function runSnoozeCron(credentials = null) {
       );
       await pool.query(
         `UPDATE siswa_periode
-         SET status_terkini = 'Tidak Lanjut', next_action = 'Tidak Ada', alasan_tidak_lanjut = 'Consent Withdrawn'
+         SET status_terkini = 'Tidak Lanjut', commercial_state = 'Disqualified', next_action = 'Tidak Ada', alasan_tidak_lanjut = 'Consent Withdrawn'
          WHERE id_siswa = ? AND marketing_period = ?`,
         [lead.id_siswa, mp]
       );
+      await syncStudentCurrentState(pool, [lead.id_siswa]);
       await recordEvent(
         'SnoozeAborted',
         lead.id_siswa,
@@ -764,10 +772,11 @@ async function runSnoozeCron(credentials = null) {
       );
       await pool.query(
         `UPDATE siswa_periode
-         SET status_terkini = 'Tidak Lanjut', next_action = 'Tidak Ada', alasan_tidak_lanjut = 'Tidak Merespons (Snooze Campaign Selesai)'
+         SET status_terkini = 'Tidak Lanjut', commercial_state = 'Disqualified', next_action = 'Tidak Ada', alasan_tidak_lanjut = 'Tidak Merespons (Snooze Campaign Selesai)'
          WHERE id_siswa = ? AND marketing_period = ?`,
         [lead.id_siswa, mp]
       );
+      await syncStudentCurrentState(pool, [lead.id_siswa]);
       await recordEvent(
         'SnoozeExpired',
         lead.id_siswa,

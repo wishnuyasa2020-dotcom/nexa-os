@@ -14,6 +14,7 @@
 const { pool, mainPool, tenantStorage } = require('../../../config/database');
 const axios  = require('axios');
 const engine = require('./templateEngine.service');
+const { normalizeLifecycleState } = require('../../../config/lifecycle.constants');
 
 // ── Helper: baca credentials BYOW dari nexamain.tenants ─────────────────────
 // Baca whatsapp_phone_id, whatsapp_waba_id, whatsapp_access_token dari tabel nexamain.tenants
@@ -80,8 +81,23 @@ async function getTemplates(query = {}) {
     params.push(status);
   }
   if (pipeline) {
-    whereParts.push('pipeline = ?');
-    params.push(pipeline);
+    const rawPipe = String(pipeline).trim().toUpperCase();
+    if (rawPipe === 'REGISTERED' || rawPipe === 'REGISTRASI' || rawPipe === 'REGISTERED_OPPORTUNITY' || rawPipe === 'TERDAFTAR') {
+      whereParts.push("pipeline IN ('REGISTERED', 'REGISTERED_OPPORTUNITY', 'REGISTRASI', 'Terdaftar')");
+    } else if (rawPipe === 'POST_CUSTOMER' || rawPipe === 'ALUMNI') {
+      whereParts.push("pipeline IN ('POST_CUSTOMER', 'ALUMNI')");
+    } else if (rawPipe === 'PROSPECT' || rawPipe === 'HOT_LEAD') {
+      whereParts.push("pipeline IN ('PROSPECT', 'HOT_LEAD', 'Prospek Aktif')");
+    } else if (rawPipe === 'LEAD' || rawPipe === 'PROBING') {
+      whereParts.push("pipeline IN ('LEAD', 'PROBING', 'Calon prospek')");
+    } else if (rawPipe === 'CUSTOMER' || rawPipe === 'PELANGGAN') {
+      whereParts.push("pipeline IN ('CUSTOMER', 'Pelanggan')");
+    } else if (rawPipe === 'OPPORTUNITY') {
+      whereParts.push("pipeline IN ('OPPORTUNITY', 'Konsultasi', 'Layak Daftar', 'Home Visit')");
+    } else {
+      whereParts.push('pipeline = ?');
+      params.push(pipeline);
+    }
   }
   if (search) {
     whereParts.push('(nama_template LIKE ? OR body_text LIKE ? OR template_name_api LIKE ?)');
@@ -163,7 +179,7 @@ async function createTemplate(data) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
     [
       `TPL-${Date.now()}`,
-      pipeline || null,
+      pipeline ? normalizeLifecycleState(pipeline) : null,
       nama_template,
       apiName,
       language_code,
