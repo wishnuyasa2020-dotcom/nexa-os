@@ -384,6 +384,7 @@ router.put('/settings/payment-config', settingsCtrl.updatePaymentConfig);
 router.get('/settings/payment-verifications', settingsCtrl.getPaymentVerifications);
 router.get('/settings/payment-verifications/search-siswa', settingsCtrl.searchSiswaForPayment);
 router.post('/settings/payment-verifications/manual-verify', settingsCtrl.manualVerifySiswaPayment);
+router.post('/settings/payment-verifications/verify-core-deposit', settingsCtrl.verifyCoreDepositPayment);
 router.post('/settings/payment-verifications/:token/verify', settingsCtrl.verifyPaymentRegistration);
 router.post('/settings/payment-verifications/:token/reject', settingsCtrl.rejectPaymentRegistration);
 

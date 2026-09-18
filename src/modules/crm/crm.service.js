@@ -402,26 +402,26 @@ async function getDashboardSummary(user, marketingPeriodArg, monthFilter = 'All'
     const c = parseInt(r.cnt, 10);
     totalSiswa += c;
     const st = r.status_terkini || '';
-    const cs = r.commercial_state || '';
+    const cs = (r.commercial_state || '').toUpperCase().trim();
 
-    // Closing (Customer / Terdaftar)
-    if (cs === 'Customer' || st === 'Terdaftar') {
+    // Closing (Customer: Core DP Conversion sah)
+    if (['CUSTOMER', 'POST_CUSTOMER'].includes(cs) || ['Closing', 'Customer', 'Siswa / Peserta'].includes(st)) {
       terdaftar += c;
     }
-    // Prospek Aktif
-    if (['Prospect', 'Opportunity', 'Registered Opportunity', 'Customer'].includes(cs) || ['Prospek Aktif', 'Konsultasi', 'Layak Home Visit', 'Home Visit', 'Siap Daftar', 'Terdaftar'].includes(st)) {
-      prospekAktif += c;
-    }
-    // Tahap Konsultasi & Di Atasnya
-    if (['Opportunity', 'Registered Opportunity', 'Customer'].includes(cs) || ['Konsultasi', 'Layak Home Visit', 'Home Visit', 'Siap Daftar', 'Terdaftar'].includes(st)) {
-      konsultasi += c;
-    }
-    // Siap Daftar
-    if (cs === 'Registered Opportunity' || st === 'Siap Daftar') {
+    // Registered (Registration Conversion: formulir pendaftaran)
+    if (['REGISTERED', 'REGISTERED OPPORTUNITY'].includes(cs) || ['Siap Daftar', 'Terdaftar'].includes(st)) {
       siapDaftar += c;
     }
+    // Prospek Aktif (Prospect + Opportunity + Registered + Customer)
+    if (['PROSPECT', 'OPPORTUNITY', 'REGISTERED', 'REGISTERED OPPORTUNITY', 'CUSTOMER', 'POST_CUSTOMER'].includes(cs) || ['Prospek Aktif', 'Konsultasi', 'Layak Home Visit', 'Home Visit', 'Siap Daftar', 'Terdaftar', 'Closing', 'Customer'].includes(st)) {
+      prospekAktif += c;
+    }
+    // Tahap Konsultasi & Di Atasnya (Opportunity + Registered + Customer)
+    if (['OPPORTUNITY', 'REGISTERED', 'REGISTERED OPPORTUNITY', 'CUSTOMER', 'POST_CUSTOMER'].includes(cs) || ['Konsultasi', 'Layak Home Visit', 'Home Visit', 'Siap Daftar', 'Terdaftar', 'Closing', 'Customer'].includes(st)) {
+      konsultasi += c;
+    }
     // Calon Prospek (Lead)
-    if (cs === 'Lead' || st === 'Calon Prospek') {
+    if (cs === 'LEAD' || st === 'Calon Prospek') {
       calonProspek += c;
     }
   });
@@ -632,19 +632,22 @@ async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All'
     paramsSiswaFiltered.push(cf.toLowerCase());
   }
 
-  // B2C Funnel Pipeline (5 Tahap Universal Ontologi: Known Profile ➔ Lead ➔ Prospect ➔ Opportunity ➔ Customer)
+  // B2C Funnel Pipeline (Canonical Lifecycle Stages: Known Profile ➔ Lead ➔ Prospect ➔ Opportunity ➔ Registered ➔ Customer)
   const q2 = `
     SELECT 
       CASE 
         WHEN sp.commercial_state IS NOT NULL AND sp.commercial_state != '' THEN
-          CASE sp.commercial_state
-            WHEN 'Known' THEN 'Known Profile'
-            WHEN 'Audience' THEN 'Known Profile'
-            WHEN 'Lead' THEN 'Lead'
-            WHEN 'Prospect' THEN 'Prospect'
-            WHEN 'Opportunity' THEN 'Opportunity'
-            WHEN 'Registered Opportunity' THEN 'Opportunity'
-            WHEN 'Customer' THEN 'Customer'
+          CASE UPPER(TRIM(sp.commercial_state))
+            WHEN 'KNOWN' THEN 'Known Profile'
+            WHEN 'KNOWN_PROFILE' THEN 'Known Profile'
+            WHEN 'AUDIENCE' THEN 'Known Profile'
+            WHEN 'LEAD' THEN 'Lead'
+            WHEN 'PROSPECT' THEN 'Prospect'
+            WHEN 'OPPORTUNITY' THEN 'Opportunity'
+            WHEN 'REGISTERED' THEN 'Registered'
+            WHEN 'REGISTERED OPPORTUNITY' THEN 'Registered'
+            WHEN 'CUSTOMER' THEN 'Customer'
+            WHEN 'POST_CUSTOMER' THEN 'Post-Customer'
             ELSE 'Lead'
           END
         ELSE
@@ -655,8 +658,11 @@ async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All'
             WHEN 'Konsultasi' THEN 'Opportunity'
             WHEN 'Layak Home Visit' THEN 'Opportunity'
             WHEN 'Home Visit' THEN 'Opportunity'
-            WHEN 'Siap Daftar' THEN 'Opportunity'
-            WHEN 'Terdaftar' THEN 'Customer'
+            WHEN 'Siap Daftar' THEN 'Registered'
+            WHEN 'Terdaftar' THEN 'Registered'
+            WHEN 'Closing' THEN 'Customer'
+            WHEN 'Customer' THEN 'Customer'
+            WHEN 'Alumni' THEN 'Post-Customer'
             ELSE 'Lead'
           END
       END AS pipeline_stage,
@@ -664,8 +670,8 @@ async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All'
     FROM siswa_periode sp
     JOIN master_siswa ms ON sp.id_siswa = ms.id_siswa
     WHERE sp.marketing_period = ?${croSiswa}${monthSiswaClause}${channelClause}
-      AND (sp.commercial_state != 'Disqualified' OR sp.commercial_state IS NULL)
-      AND (sp.status_terkini != 'Tidak Lanjut' OR sp.status_terkini IS NULL)
+      AND (UPPER(TRIM(IFNULL(sp.commercial_state, ''))) NOT IN ('DISQUALIFIED', 'TIDAK LANJUT'))
+      AND (IFNULL(sp.status_terkini, '') != 'Tidak Lanjut')
     GROUP BY pipeline_stage
   `;
   const [siswaRows] = await pool.query(q2, paramsSiswaFiltered);
@@ -673,7 +679,10 @@ async function getDashboardFunnels(user, marketingPeriodArg, monthFilter = 'All'
   const funnelSiswaMap = {};
   siswaRows.forEach(r => funnelSiswaMap[r.pipeline_stage] = parseInt(r.cnt, 10));
   
-  const ONTOLOGY_STAGES = ['Known Profile', 'Lead', 'Prospect', 'Opportunity', 'Customer'];
+  const ONTOLOGY_STAGES = ['Known Profile', 'Lead', 'Prospect', 'Opportunity', 'Registered', 'Customer'];
+  if (funnelSiswaMap['Post-Customer'] && funnelSiswaMap['Post-Customer'] > 0) {
+    ONTOLOGY_STAGES.push('Post-Customer');
+  }
   const funnelSiswa = ONTOLOGY_STAGES.map(stage => ({
     status: stage,
     count: funnelSiswaMap[stage] || 0
@@ -2663,7 +2672,7 @@ async function getDashboardLeaderboard(user, period) {
     LEFT JOIN users u ON sp.cro = u.username
     WHERE 
       sp.marketing_period = ?
-      AND (sp.commercial_state = 'Customer' OR sp.status_terkini = 'Terdaftar')
+      AND (UPPER(TRIM(IFNULL(sp.commercial_state, ''))) IN ('CUSTOMER', 'POST_CUSTOMER') OR sp.status_terkini IN ('Closing', 'Customer', 'Siswa / Peserta'))
       AND MONTH(COALESCE(sp.status_updated_date, sp.created_date)) = MONTH(CURDATE())
       AND YEAR(COALESCE(sp.status_updated_date, sp.created_date)) = YEAR(CURDATE())
     GROUP BY sp.cro, u.nama
@@ -2690,7 +2699,7 @@ async function getDashboardLeaderboard(user, period) {
                RANK() OVER (ORDER BY COUNT(*) DESC) AS rn
         FROM siswa_periode sp
         WHERE sp.marketing_period = ?
-          AND (sp.commercial_state = 'Customer' OR sp.status_terkini = 'Terdaftar')
+          AND (UPPER(TRIM(IFNULL(sp.commercial_state, ''))) IN ('CUSTOMER', 'POST_CUSTOMER') OR sp.status_terkini IN ('Closing', 'Customer', 'Siswa / Peserta'))
           AND MONTH(COALESCE(sp.status_updated_date, sp.created_date)) = MONTH(CURDATE())
           AND YEAR(COALESCE(sp.status_updated_date, sp.created_date)) = YEAR(CURDATE())
         GROUP BY sp.cro

@@ -446,7 +446,7 @@ async function handleIncomingMessage(msg, contactMeta) {
           [snoozeDate, idSiswa]
         );
         await conn.query(
-          `UPDATE siswa_periode SET status_terkini = 'Data Masuk', commercial_state = 'Known', next_action = 'Snooze', due_date = NULL WHERE id_siswa = ?`,
+          `UPDATE siswa_periode SET status_terkini = 'Data Masuk', commercial_state = 'KNOWN_PROFILE', next_action = 'Snooze', due_date = NULL WHERE id_siswa = ?`,
           [idSiswa]
         );
         const eventId = `EVT-WH-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;

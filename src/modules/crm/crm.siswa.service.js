@@ -55,8 +55,15 @@ const HASIL_AKTIVITAS_SISWA = {
   'Tdk Memenuhi Syarat':          { status: 'Tidak Lanjut',     nextAction: 'Tidak Ada', isTerminal: true, requiresAlasan: true },
 };
 
-// ── Event-Sourcing: Commercial State Pipeline (Fase 1) ────────────────────────
-const COMMERCIAL_STATE_PIPELINE = ['Audience', 'Known', 'Lead', 'Prospect', 'Opportunity', 'Registered Opportunity', 'Customer'];
+// ── Event-Sourcing: Canonical Lifecycle State Pipeline (NexaMOS v2) ───────────
+const {
+  CANONICAL_STATES,
+  CANONICAL_STATE_PIPELINE,
+  normalizeLifecycleState,
+  getDisplayLabel
+} = require('../../config/lifecycle.constants');
+
+const COMMERCIAL_STATE_PIPELINE = CANONICAL_STATE_PIPELINE;
 
 // Outcome → efek pada commercial_state dan intent
 const INTERACTION_OUTCOME_MAP = {
@@ -125,7 +132,11 @@ async function listSiswa(user, query = {}) {
     params.push(query.sekolahId || query.idSekolah);
   }
   if (query.status)          { whereParts.push('sp.status_terkini = ?');   params.push(query.status); }
-  if (query.commercialState) { whereParts.push('sp.commercial_state = ?'); params.push(query.commercialState); }
+  if (query.commercialState) {
+    const norm = normalizeLifecycleState(query.commercialState);
+    whereParts.push('(sp.commercial_state = ? OR sp.commercial_state = ?)');
+    params.push(norm, query.commercialState);
+  }
   if (query.intent)          { whereParts.push('sp.intent = ?');            params.push(query.intent); }
   if (query.kelas)           { whereParts.push('mk.nama_kelas = ?');        params.push(query.kelas); }
   if (query.prioritas)       { whereParts.push('sp.prioritas = ?');         params.push(query.prioritas); }
@@ -166,7 +177,7 @@ async function listSiswa(user, query = {}) {
       IFNULL(ms.kebutuhan_layanan, '') as kebutuhanLayanan,
       IFNULL(sp.cro, '') as cro,
       IFNULL(sp.status_terkini, '') as status,
-      IFNULL(sp.commercial_state, 'Lead') as commercialState,
+      IFNULL(sp.commercial_state, 'LEAD') as commercialState,
       IFNULL(sp.intent, '') as intent,
       IFNULL(sp.priority_score, 0) as priorityScore,
       IFNULL(sp.next_action, '') as nextAction,
@@ -225,7 +236,7 @@ async function detailSiswa(id, user, query = {}) {
       ms.wa, ms.bsuid, COALESCE(ms.source_channel, 'sekolah') as source_channel, ms.source_detail, ms.kebutuhan_layanan,
       mk.nama_kelas as kelas, ms.minat_awal, ms.rencana_lulus, sp.prioritas,
       sp.status_terkini,
-      IFNULL(sp.commercial_state, 'Lead') as commercial_state,
+      IFNULL(sp.commercial_state, 'LEAD') as commercial_state,
       IFNULL(sp.intent, 'Mid') as intent,
       IFNULL(sp.priority_score, 0) as priority_score,
       sp.next_action, DATE_FORMAT(sp.due_date, '%Y-%m-%d') as due_date,
@@ -371,12 +382,12 @@ async function tambahSiswa(data, user) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [idSiswa, data.id_sekolah || null, data.nama_lengkap, waClean || null, data.bsuid || null, sourceChannel, sourceDetail, kebutuhanLayanan, namaKelas, kelasId || null, data.minat_awal, data.rencana_lulus, optInWa]);
 
-    // Insert siswa_periode (default Data Masuk, commercial_state Known)
+    // Insert siswa_periode (default Data Masuk, commercial_state KNOWN_PROFILE)
     const idRecord = `SWP-${Date.now().toString().slice(-6)}-${Math.floor(Math.random()*1000)}`;
     await conn.query(`
       INSERT INTO siswa_periode 
       (id_record, id_siswa, nama_siswa, marketing_period, status_terkini, commercial_state, next_action, due_date, cro, prioritas)
-      VALUES (?, ?, ?, ?, 'Data Masuk', 'Known', 'Screening', DATE_ADD(CURDATE(), INTERVAL 1 DAY), ?, ?)
+      VALUES (?, ?, ?, ?, 'Data Masuk', 'KNOWN_PROFILE', 'Screening', DATE_ADD(CURDATE(), INTERVAL 1 DAY), ?, ?)
     `, [idRecord, idSiswa, data.nama_lengkap, mp, pjCro, prioritas]);
 
     await syncStudentCurrentState(conn, [idSiswa]);
@@ -597,12 +608,18 @@ async function inputAktivitas(id, data, user) {
     let commercialStateUpdate = '';
     if (statusSesudah === 'Tidak Lanjut') {
       commercialStateUpdate = ", commercial_state = 'Disqualified'";
-    } else if (statusSesudah === 'Terdaftar') {
-      commercialStateUpdate = ", commercial_state = 'Customer'";
-    } else if (statusSesudah === 'Siap Daftar' || statusSesudah === 'Opportunity Terbuka') {
-      commercialStateUpdate = ", commercial_state = 'Opportunity'";
-    } else if (statusSesudah === 'Prospek Aktif') {
-      commercialStateUpdate = ", commercial_state = 'Prospect'";
+    } else if (['Alumni', 'Lulus Pelatihan', 'Mantan Pelanggan', 'POST_CUSTOMER'].includes(statusSesudah)) {
+      commercialStateUpdate = ", commercial_state = 'POST_CUSTOMER'";
+    } else if (['Customer', 'Siswa / Peserta', 'Pelanggan', 'Lunas DP', 'Pelatihan'].includes(statusSesudah)) {
+      commercialStateUpdate = ", commercial_state = 'CUSTOMER'";
+    } else if (['Terdaftar', 'Terdaftar Formulir', 'Siswa Terdaftar', 'Kontak Terdaftar', 'REGISTERED'].includes(statusSesudah)) {
+      commercialStateUpdate = ", commercial_state = 'REGISTERED'";
+    } else if (['Siap Daftar', 'Opportunity Terbuka', 'Siswa Serius', 'Kontak Serius', 'OPPORTUNITY'].includes(statusSesudah)) {
+      commercialStateUpdate = ", commercial_state = 'OPPORTUNITY'";
+    } else if (['Prospek Aktif', 'Siswa Potensial', 'Kontak Potensial', 'PROSPECT'].includes(statusSesudah)) {
+      commercialStateUpdate = ", commercial_state = 'PROSPECT'";
+    } else if (['Calon Prospek', 'Siswa Hangat', 'Kontak Hangat', 'LEAD'].includes(statusSesudah)) {
+      commercialStateUpdate = ", commercial_state = 'LEAD'";
     }
 
     await conn.query(`
@@ -773,7 +790,7 @@ async function importBatch(dataBatch, croName, user) {
       const idRecord = `SWP-${Date.now().toString().slice(-6)}-${Math.floor(Math.random()*1000)}`;
       await conn.query(`
         INSERT INTO siswa_periode (id_record, id_siswa, nama_siswa, marketing_period, status_terkini, commercial_state, next_action, due_date, cro, prioritas)
-        VALUES (?, ?, ?, ?, 'Data Masuk', 'Known', 'Screening', DATE_ADD(CURDATE(), INTERVAL 1 DAY), ?, ?)
+        VALUES (?, ?, ?, ?, 'Data Masuk', 'KNOWN_PROFILE', 'Screening', DATE_ADD(CURDATE(), INTERVAL 1 DAY), ?, ?)
       `, [idRecord, idSiswa, row.nama_lengkap, mp, assignedCro, prioritas]);
 
       insertedIds.push(idSiswa);
@@ -928,7 +945,7 @@ async function submitAssessment(id, data, user) {
   const allPass = (fit === 'pass') && (need === 'pass') && (ability === 'pass') && (readiness === 'pass');
   const anyFail = (fit === 'fail') || (ability === 'fail'); // Hard Gate: Fit & Ability tidak bisa dinego
 
-  let newState = periodeRows[0].commercial_state || 'Lead';
+  let newState = normalizeLifecycleState(periodeRows[0].commercial_state) || 'LEAD';
   let eventType = 'QualificationAssessmentSubmitted';
   let newStatus = periodeRows[0].status_terkini;
 
@@ -937,7 +954,7 @@ async function submitAssessment(id, data, user) {
     newStatus = 'Tidak Lanjut';
     eventType = 'LeadDisqualified';
   } else if (allPass) {
-    newState = 'Prospect';
+    newState = 'PROSPECT';
     newStatus = 'Prospek Aktif';
     eventType = 'StateTransitionedToProspect';
   }
@@ -1209,7 +1226,7 @@ async function logDecisionConsultation(id, data, user) {
 
   if (hasil_konsultasi === 'Komitmen Disetujui') {
     // Commitment Threshold terpenuhi! Siswa berhak masuk ke Opportunity
-    newState = 'Opportunity';
+    newState = 'OPPORTUNITY';
     newStatus = 'Opportunity Terbuka';
     eventType = 'DecisionConsultationCompleted';
     hasilAktivitas = 'Komitmen Disetujui (Opportunity)';
@@ -1358,7 +1375,7 @@ async function listHomeVisits(user, query = {}) {
       DATE_FORMAT(aks.due_date, '%Y-%m-%d') as dueDate,
       aks.catatan,
       aks.pj_cro as pjCro,
-      IFNULL(sp.commercial_state, 'Prospect') as commercialState
+      IFNULL(sp.commercial_state, 'PROSPECT') as commercialState
     FROM aktivitas_siswa aks
     LEFT JOIN master_siswa ms ON aks.id_siswa = ms.id_siswa
     LEFT JOIN master_kelas mk ON ms.kelas_id = mk.id
@@ -1424,7 +1441,7 @@ async function getProspectsForConsultation(user, query = {}) {
 
   const whereParts = [
     'sp.marketing_period = ?',
-    "sp.commercial_state IN ('Prospect', 'Lead', 'Opportunity')"
+    "sp.commercial_state IN ('Prospect', 'Lead', 'Opportunity', 'PROSPECT', 'LEAD', 'OPPORTUNITY')"
   ];
   const params = [mp];
 
@@ -1449,14 +1466,14 @@ async function getProspectsForConsultation(user, query = {}) {
       IFNULL(sek.nama_sekolah, '') as namaSekolah,
       IFNULL(mk.nama_kelas, '') as kelas,
       IFNULL(ms.wa, '') as wa,
-      IFNULL(sp.commercial_state, 'Prospect') as commercialState,
+      IFNULL(sp.commercial_state, 'PROSPECT') as commercialState,
       IFNULL(sp.cro, '') as cro
     FROM siswa_periode sp
     LEFT JOIN master_siswa ms ON sp.id_siswa = ms.id_siswa
     LEFT JOIN master_kelas mk ON ms.kelas_id = mk.id
     LEFT JOIN master_sekolah sek ON ms.id_sekolah = sek.id_sekolah
     WHERE ${where}
-    ORDER BY sp.commercial_state = 'Prospect' DESC, ms.nama_lengkap ASC
+    ORDER BY sp.commercial_state IN ('Prospect', 'PROSPECT') DESC, ms.nama_lengkap ASC
     LIMIT 100
   `;
 

@@ -312,7 +312,7 @@ async function simulateReEntry(targetId, options = {}) {
   }
 
   if (excludeRegistered) {
-    whereConditions.push("LOWER(IFNULL(sp.commercial_state, '')) != 'registered opportunity'");
+    whereConditions.push("LOWER(IFNULL(sp.commercial_state, '')) NOT IN ('registered', 'registered opportunity')");
     whereConditions.push("LOWER(IFNULL(sp.status_terkini, '')) NOT LIKE '%terdaftar%'");
   }
 
@@ -386,7 +386,7 @@ async function executeReEntry(targetId, options = {}, actor = 'System') {
     whereConditions.push("LOWER(IFNULL(sp.status_terkini, '')) NOT LIKE '%closing%'");
   }
   if (excludeRegistered) {
-    whereConditions.push("LOWER(IFNULL(sp.commercial_state, '')) != 'registered opportunity'");
+    whereConditions.push("LOWER(IFNULL(sp.commercial_state, '')) NOT IN ('registered', 'registered opportunity')");
     whereConditions.push("LOWER(IFNULL(sp.status_terkini, '')) NOT LIKE '%terdaftar%'");
   }
   if (excludeDoNotContact) {
@@ -430,10 +430,10 @@ async function executeReEntry(targetId, options = {}, actor = 'System') {
           created_date, last_updated
         ) VALUES (
           ?, ?, ?, ?, NULL, 'P1',
-          'Lead', 'Lead', 'Follow Up Awal Cohort Baru', DATE_ADD(CURRENT_DATE(), INTERVAL 3 DAY), ?,
+          'Calon Prospek', 'LEAD', 'Follow Up Awal Cohort Baru', DATE_ADD(CURRENT_DATE(), INTERVAL 3 DAY), ?,
           NOW(), NOW()
         ) ON DUPLICATE KEY UPDATE 
-          commercial_state = 'Lead', status_terkini = 'Lead', cro = NULL, last_updated = NOW()`,
+          commercial_state = 'LEAD', status_terkini = 'Calon Prospek', cro = NULL, last_updated = NOW()`,
         [recordId, student.id_siswa, student.nama_siswa, target.nama_period, student.intent || 'Mid']
       );
 
@@ -442,7 +442,7 @@ async function executeReEntry(targetId, options = {}, actor = 'System') {
         person_id: student.id_siswa,
         cohort_id: target.nama_period,
         source: `Re-entry_Process_${sourcePeriod}`,
-        initial_commercial_state: 'Lead',
+        initial_commercial_state: 'LEAD',
       };
       await conn.query(
         `INSERT INTO events_log (

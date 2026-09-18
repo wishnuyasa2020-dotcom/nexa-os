@@ -32,7 +32,7 @@ async function _notifyAdminPayment({ namaSiswa, namaSekolah, nominal, paymentMet
           </div>
           <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-left: 4px solid #16a34a; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
             <p style="margin: 0 0 6px; font-size: 14px; font-weight: 700; color: #0f172a;">✅ Registration Fee Payment Confirmed</p>
-            <p style="margin: 0; font-size: 13px; color: #334155;">A student's registration form payment has been verified and their status has been updated to <strong>Registered Opportunity</strong>.</p>
+            <p style="margin: 0; font-size: 13px; color: #334155;">A student's registration form payment has been verified and their status has been updated to <strong>Registered (Siswa Terdaftar)</strong>.</p>
           </div>
           <table style="width:100%; border-collapse: collapse; font-size: 13.5px;">
             <tr style="border-bottom: 1px solid #f1f5f9;">
@@ -57,7 +57,7 @@ async function _notifyAdminPayment({ namaSiswa, namaSekolah, nominal, paymentMet
             </tr>
             <tr style="border-bottom: 1px solid #f1f5f9;">
               <td style="padding: 8px 0; color: #64748b;">New Status</td>
-              <td style="padding: 8px 0;"><span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:12px;font-weight:700;font-size:12px;">Registered Opportunity</span></td>
+              <td style="padding: 8px 0;"><span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:12px;font-weight:700;font-size:12px;">Registered (Siswa Terdaftar)</span></td>
             </tr>
             <tr>
               <td style="padding: 8px 0; color: #64748b;">Verified By</td>
@@ -505,11 +505,11 @@ async function verifyPaymentRegistration(token, data = {}, actor = 'Admin') {
     const marketingPeriod = spRows[0]?.marketing_period || null;
     const cro = spRows[0]?.cro || null;
 
-    // 3. Update siswa_periode ke Registered Opportunity & Terdaftar Formulir
+    // 3. Update siswa_periode ke REGISTERED & Terdaftar Formulir
     if (spRows.length > 0) {
       await conn.query(
         `UPDATE siswa_periode 
-         SET commercial_state = 'Registered Opportunity',
+         SET commercial_state = 'REGISTERED',
              status_terkini = 'Terdaftar Formulir',
              last_updated = NOW()
          WHERE id_record = ?`,
@@ -530,7 +530,7 @@ async function verifyPaymentRegistration(token, data = {}, actor = 'Admin') {
       notes,
       verified_by: actor,
       previous_state: prevCommercialState,
-      new_state: 'Registered Opportunity'
+      new_state: 'REGISTERED'
     };
 
     await conn.query(
@@ -549,7 +549,7 @@ async function verifyPaymentRegistration(token, data = {}, actor = 'Admin') {
     await conn.query(
       `INSERT INTO aktivitas_siswa 
          (tanggal, id_siswa, id_sekolah_nama, jenis_aktivitas, hasil_aktivitas, status_sebelum, status_sesudah, catatan, pj_cro, event_type, channel, marketing_period)
-       VALUES (CURDATE(), ?, ?, 'Pembayaran Formulir', 'Verifikasi Berhasil', ?, 'Registered Opportunity', ?, ?, 'RegistrationFeePaid', ?, ?)`,
+       VALUES (CURDATE(), ?, ?, 'Pembayaran Formulir', 'Verifikasi Berhasil', ?, 'REGISTERED', ?, ?, 'RegistrationFeePaid', ?, ?)`,
       [
         idSiswa,
         idSekolahNama,
@@ -570,7 +570,7 @@ async function verifyPaymentRegistration(token, data = {}, actor = 'Admin') {
       token,
       id_siswa: idSiswa,
       nama_siswa: tokenRecord.nama_lengkap,
-      commercial_state: 'Registered Opportunity',
+      commercial_state: 'REGISTERED',
       status_terkini: 'Terdaftar Formulir',
       nominal,
       verified_by: actor
@@ -721,7 +721,7 @@ async function manualVerifySiswaPayment(idSiswa, data = {}, actor = 'Admin') {
     if (spRows.length > 0) {
       await conn.query(
         `UPDATE siswa_periode 
-         SET commercial_state = 'Registered Opportunity',
+         SET commercial_state = 'REGISTERED',
              status_terkini = 'Terdaftar Formulir',
              last_updated = NOW()
          WHERE id_record = ?`,
@@ -746,7 +746,7 @@ async function manualVerifySiswaPayment(idSiswa, data = {}, actor = 'Admin') {
           notes,
           verified_by: actor,
           previous_state: prevCommercialState,
-          new_state: 'Registered Opportunity'
+          new_state: 'REGISTERED'
         }),
         actor,
         marketingPeriod
@@ -763,7 +763,7 @@ async function manualVerifySiswaPayment(idSiswa, data = {}, actor = 'Admin') {
     await conn.query(
       `INSERT INTO aktivitas_siswa 
          (tanggal, id_siswa, id_sekolah_nama, jenis_aktivitas, hasil_aktivitas, status_sebelum, status_sesudah, catatan, pj_cro, event_type, channel, marketing_period)
-       VALUES (CURDATE(), ?, ?, 'Pembayaran Formulir', 'Verifikasi Berhasil', ?, 'Registered Opportunity', ?, ?, 'RegistrationFeePaid', ?, ?)`,
+       VALUES (CURDATE(), ?, ?, 'Pembayaran Formulir', 'Verifikasi Berhasil', ?, 'REGISTERED', ?, ?, 'RegistrationFeePaid', ?, ?)`,
       [
         idSiswa,
         idSekolahNama,
@@ -796,8 +796,108 @@ async function manualVerifySiswaPayment(idSiswa, data = {}, actor = 'Admin') {
     return {
       token,
       id_siswa: idSiswa,
-      commercial_state: 'Registered Opportunity',
+      commercial_state: 'REGISTERED',
       status_terkini: 'Terdaftar Formulir',
+      nominal,
+      verified_by: actor
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
+ * Verifikasi Pembayaran DP Pelatihan (Core Conversion)
+ * Mentransisikan status siswa dari REGISTERED menjadi CUSTOMER
+ */
+async function verifyCoreDepositPayment(idSiswa, data = {}, actor = 'Admin') {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [spRows] = await conn.query(
+      'SELECT id_record, commercial_state, status_terkini, marketing_period, cro FROM siswa_periode WHERE id_siswa = ? ORDER BY COALESCE(last_updated, created_date) DESC, id_record DESC LIMIT 1',
+      [idSiswa]
+    );
+
+    if (spRows.length === 0) {
+      throw new Error('Data siswa di periode aktif tidak ditemukan.');
+    }
+
+    const prevCommercialState = spRows[0].commercial_state || 'REGISTERED';
+    const marketingPeriod = spRows[0].marketing_period || null;
+    const cro = spRows[0].cro || null;
+    const nominal = Number(data.nominal) || 1500000;
+    const paymentMethod = data.paymentMethod || 'Transfer Bank Manual';
+    const notes = data.notes || '';
+
+    // 1. Update siswa_periode ke CUSTOMER & Lunas DP Pelatihan
+    await conn.query(
+      `UPDATE siswa_periode 
+       SET commercial_state = 'CUSTOMER',
+           status_terkini = 'Lunas DP',
+           last_updated = NOW()
+       WHERE id_record = ?`,
+      [spRows[0].id_record]
+    );
+
+    // 2. Insert event immutable CoreDepositVerified
+    const eventId = `EVT-DP-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    await conn.query(
+      `INSERT INTO events_log (event_id, aggregate_type, aggregate_id, event_type, payload, actor_id, marketing_period, created_at)
+       VALUES (?, 'student', ?, 'CoreDepositVerified', ?, ?, ?, NOW())`,
+      [
+        eventId,
+        idSiswa,
+        JSON.stringify({
+          id_siswa: idSiswa,
+          nominal,
+          payment_method: paymentMethod,
+          payment_type: 'Core Deposit (DP Pelatihan)',
+          notes,
+          verified_by: actor,
+          previous_state: prevCommercialState,
+          new_state: 'CUSTOMER'
+        }),
+        actor,
+        marketingPeriod
+      ]
+    );
+
+    // 3. Insert aktivitas_siswa (Audit Trail)
+    const [sekRows] = await conn.query(
+      'SELECT sek.nama_sekolah FROM master_siswa ms LEFT JOIN master_sekolah sek ON sek.id_sekolah = ms.id_sekolah WHERE ms.id_siswa = ?',
+      [idSiswa]
+    );
+    const idSekolahNama = sekRows[0]?.nama_sekolah || null;
+
+    await conn.query(
+      `INSERT INTO aktivitas_siswa 
+         (tanggal, id_siswa, id_sekolah_nama, jenis_aktivitas, hasil_aktivitas, status_sebelum, status_sesudah, catatan, pj_cro, event_type, channel, marketing_period)
+       VALUES (CURDATE(), ?, ?, 'Pembayaran DP Pelatihan', 'Core Conversion Berhasil', ?, 'CUSTOMER', ?, ?, 'CoreDepositVerified', ?, ?)`,
+      [
+        idSiswa,
+        idSekolahNama,
+        prevCommercialState,
+        `DP Pelatihan Rp ${nominal.toLocaleString('id-ID')} diverifikasi oleh ${actor}. Catatan: ${notes || '-'}. Metode: ${paymentMethod}`,
+        cro,
+        paymentMethod,
+        marketingPeriod
+      ]
+    );
+
+    await conn.commit();
+
+    // 4. Sinkronisasi Read-Model Projection (student_current_state)
+    await syncStudentCurrentState(conn, [idSiswa]);
+
+    return {
+      id_siswa: idSiswa,
+      commercial_state: 'CUSTOMER',
+      status_terkini: 'Lunas DP',
       nominal,
       verified_by: actor
     };
@@ -828,5 +928,6 @@ module.exports = {
   verifyPaymentRegistration,
   rejectPaymentRegistration,
   searchSiswaForPayment,
-  manualVerifySiswaPayment
+  manualVerifySiswaPayment,
+  verifyCoreDepositPayment
 };

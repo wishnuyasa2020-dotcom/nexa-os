@@ -217,7 +217,7 @@ async function verifyPaymentRegistration(req, res) {
     }
     const actor = req.user?.nama || req.user?.username || 'Admin';
     const data = await settingsService.verifyPaymentRegistration(req.params.token, req.body, actor);
-    res.json({ status: 'ok', message: 'Pembayaran formulir pendaftaran berhasil diverifikasi. Status siswa telah beralih ke Registered Opportunity.', data });
+    res.json({ status: 'ok', message: 'Pembayaran formulir pendaftaran berhasil diverifikasi. Status siswa telah beralih ke Siswa Terdaftar (REGISTERED).', data });
   } catch (err) {
     console.error('verifyPaymentRegistration Error:', err);
     res.status(400).json({ status: 'error', message: err.message });
@@ -258,9 +258,23 @@ async function manualVerifySiswaPayment(req, res) {
     }
     const actor = req.user?.nama || req.user?.username || 'Admin';
     const data = await settingsService.manualVerifySiswaPayment(req.body.id_siswa, req.body, actor);
-    res.json({ status: 'ok', message: 'Pembayaran formulir pendaftaran berhasil dicatat & diverifikasi manual.', data });
+    res.json({ status: 'ok', message: 'Pembayaran formulir pendaftaran berhasil dicatat & diverifikasi manual (REGISTERED).', data });
   } catch (err) {
     console.error('manualVerifySiswaPayment Error:', err);
+    res.status(400).json({ status: 'error', message: err.message });
+  }
+}
+
+async function verifyCoreDepositPayment(req, res) {
+  try {
+    if (!_checkAdminOrManager(req.user)) {
+      return res.status(403).json({ status: 'error', message: 'Hanya Admin atau Manager yang berwenang memverifikasi DP / Core Deposit.' });
+    }
+    const actor = req.user?.nama || req.user?.username || 'Admin';
+    const data = await settingsService.verifyCoreDepositPayment(req.body.id_siswa, req.body, actor);
+    res.json({ status: 'ok', message: 'Pembayaran DP (Core Deposit) berhasil diverifikasi. Siswa kini resmi berstatus Siswa / Peserta (CUSTOMER).', data });
+  } catch (err) {
+    console.error('verifyCoreDepositPayment Error:', err);
     res.status(400).json({ status: 'error', message: err.message });
   }
 }
@@ -284,5 +298,6 @@ module.exports = {
   verifyPaymentRegistration,
   rejectPaymentRegistration,
   searchSiswaForPayment,
-  manualVerifySiswaPayment
+  manualVerifySiswaPayment,
+  verifyCoreDepositPayment
 };

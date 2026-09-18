@@ -19,7 +19,11 @@ async function syncStudentCurrentState(connOrPool, studentIds = null) {
         sp.id_siswa,
         ms.nama_lengkap,
         sp.cro,
-        COALESCE(sp.commercial_state, 'Lead'),
+        CASE UPPER(TRIM(COALESCE(sp.commercial_state, 'KNOWN_PROFILE')))
+          WHEN 'KNOWN' THEN 'KNOWN_PROFILE'
+          WHEN 'REGISTERED OPPORTUNITY' THEN 'REGISTERED'
+          ELSE UPPER(TRIM(COALESCE(sp.commercial_state, 'KNOWN_PROFILE')))
+        END,
         sp.status_terkini,
         sp.marketing_period,
         COALESCE(sp.last_updated, sp.created_date, NOW())

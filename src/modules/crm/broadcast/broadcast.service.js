@@ -12,6 +12,7 @@
 
 const { pool } = require('../../../config/database');
 const crypto   = require('crypto');
+const { normalizeLifecycleState } = require('../../../config/lifecycle.constants');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER
@@ -74,11 +75,13 @@ async function getAudience(user, query = {}) {
   }
 
   if (commercialState) {
-    whereParts.push('(sp.commercial_state = ? OR sp.status_terkini = ?)');
-    params.push(commercialState, commercialState);
+    const norm = normalizeLifecycleState(commercialState);
+    whereParts.push('(sp.commercial_state = ? OR sp.commercial_state = ? OR sp.status_terkini = ?)');
+    params.push(norm, commercialState, commercialState);
   } else if (status) {
-    whereParts.push('(sp.status_terkini = ? OR sp.commercial_state = ?)');
-    params.push(status, status);
+    const norm = normalizeLifecycleState(status);
+    whereParts.push('(sp.commercial_state = ? OR sp.status_terkini = ? OR sp.commercial_state = ?)');
+    params.push(norm, status, status);
   }
 
   const where = whereParts.join(' AND ');
@@ -104,7 +107,7 @@ async function getAudience(user, query = {}) {
       IFNULL(sek.nama_sekolah, '-')              AS sekolah,
       IFNULL(ms.wa, '')                          AS phone,
       IFNULL(sp.status_terkini, '')              AS statusPipeline,
-      IFNULL(sp.commercial_state, 'Lead')        AS commercialState,
+      IFNULL(sp.commercial_state, 'LEAD')        AS commercialState,
       'Granted'                                  AS consent,
       CASE
         WHEN sw.sw_status = 'open' THEN 1
