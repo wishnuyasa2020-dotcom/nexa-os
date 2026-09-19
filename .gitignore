@@ -5,4 +5,5 @@ storage/
 *.log
 docs/
 .md
+ga4.json
 

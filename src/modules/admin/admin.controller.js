@@ -433,6 +433,22 @@ async function verifyWhatsappOtp(req, res) {
   }
 }
 
+/**
+ * GET /api/admin/analytics/ga4
+ * Mengambil ringkasan metrik GA4 (Pengunjung Hari Ini & Top Sumber Trafik)
+ */
+async function getGA4Analytics(req, res) {
+  try {
+    const ga4Service = require('./ga4.service');
+    const forceRefresh = req.query.refresh === 'true';
+    const data = await ga4Service.getAnalyticsOverview(forceRefresh);
+    res.json({ status: 'ok', data });
+  } catch (err) {
+    console.error('getGA4Analytics Error:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+}
+
 module.exports = {
   requireAdminKey,
   ping,
@@ -463,5 +479,7 @@ module.exports = {
   rejectWhatsappRequest,
   triggerWhatsappOtp,
   verifyWhatsappOtp,
+  getGA4Analytics,
 };
+
 

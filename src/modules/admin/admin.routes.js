@@ -29,6 +29,7 @@ router.get('/usage', ctrl.usage);
 router.get('/users', ctrl.users);
 router.get('/health', ctrl.health);
 router.get('/activity', ctrl.activity);
+router.get('/analytics/ga4', ctrl.getGA4Analytics);
 
 // Pustaka Template NexaMOS (27 Template Master Library) & Deployer
 router.get('/templates/library',                            ctrl.getTemplateLibrary);
