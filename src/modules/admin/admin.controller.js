@@ -441,7 +441,8 @@ async function getGA4Analytics(req, res) {
   try {
     const ga4Service = require('./ga4.service');
     const forceRefresh = req.query.refresh === 'true';
-    const data = await ga4Service.getAnalyticsOverview(forceRefresh);
+    const range = req.query.range || 'today';
+    const data = await ga4Service.getAnalyticsOverview(forceRefresh, range);
     res.json({ status: 'ok', data });
   } catch (err) {
     console.error('getGA4Analytics Error:', err);
