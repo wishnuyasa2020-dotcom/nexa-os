@@ -63,6 +63,13 @@ async function update(req, res) {
 
 async function resetPassword(req, res) {
   try {
+    const tenantId = req.user?.tenantId || req.user?.tenant_id;
+    if (tenantId === 'crm-demo' || String(tenantId || '').toLowerCase().includes('demo')) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Fitur reset password dinonaktifkan untuk akun demo demi menjaga integritas akses bersama.'
+      });
+    }
     const actor = req.user?.nama || req.user?.username || 'Admin';
     const { new_password } = req.body;
     const reqMeta = {
