@@ -9,7 +9,7 @@ function _checkAdminOrManager(user) {
 }
 
 function _resolveTenantId(req) {
-  return req.user?.tenantId || tenantStorage.getStore() || 'derma-indonesia';
+  return req.user?.tenantId || req.user?.tenant_id || tenantStorage.getStore() || 'crm-demo';
 }
 
 async function getStatus(req, res) {

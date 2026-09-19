@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { pool, mainPool } = require('../../config/database');
 const { sendGmailAPI } = require('../../utils/mailer');
 
 
@@ -233,14 +234,26 @@ async function getWhatsappStatus(tenantId) {
   );
 
   if (rows.length === 0) {
-    throw new Error(`Tenant "${tenantId}" tidak ditemukan.`);
+    return {
+      tenantId,
+      brandName: tenantId,
+      whatsappPhoneId: null,
+      whatsappWabaId: null,
+      whatsappNumber: null,
+      whatsappDisplayName: null,
+      whatsappStatus: 'NOT_CONFIGURED',
+      whatsappBusinessCategory: null,
+      whatsappRequestedAt: null,
+      whatsappConnectedAt: null,
+      whatsappNotes: null,
+    };
   }
 
   const t = rows[0];
   const isDerma = t.tenant_id === 'derma-indonesia';
   return {
     tenantId: t.tenant_id,
-    brandName: t.brand_name,
+    brandName: t.brand_name || t.tenant_id,
     whatsappPhoneId: t.whatsapp_phone_id || (isDerma ? (process.env.WA_PHONE_ID || process.env.WA_PHONE_NUMBER_ID) : null),
     whatsappWabaId: t.whatsapp_waba_id || (isDerma ? process.env.WA_WABA_ID : null),
     whatsappNumber: t.whatsapp_number || (isDerma ? '6285770400134' : null),
