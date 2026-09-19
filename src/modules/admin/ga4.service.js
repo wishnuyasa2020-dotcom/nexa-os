@@ -68,6 +68,8 @@ function resolveDateRange(range = 'today') {
   const startOfMonth = `${year}-${month}-01`;
 
   switch (range) {
+    case 'yesterday':
+      return { startDate: 'yesterday', endDate: 'yesterday', label: 'Kemarin' };
     case '7d':
       return { startDate: '7daysAgo', endDate: 'today', label: '7 Hari Terakhir' };
     case '30d':
@@ -83,10 +85,10 @@ function resolveDateRange(range = 'today') {
 /**
  * Mengambil ringkasan analitik GA4 dan top sumber trafik
  * @param {boolean} forceRefresh - jika true, lewati cache memori
- * @param {string} range - 'today' | '7d' | '30d' | 'month'
+ * @param {string} range - 'today' | 'yesterday' | '7d' | '30d' | 'month'
  */
 async function getAnalyticsOverview(forceRefresh = false, range = 'today') {
-  const normalizedRange = ['today', '7d', '30d', 'month'].includes(range) ? range : 'today';
+  const normalizedRange = ['today', 'yesterday', '7d', '30d', 'month'].includes(range) ? range : 'today';
   const now = Date.now();
   const dateConfig = resolveDateRange(normalizedRange);
 
